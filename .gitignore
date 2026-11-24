@@ -1,0 +1,10 @@
+# Local-only reverse-engineering artefacts (never publish decompiled game code)
+decomp/
+scratch/
+node_modules/
+__pycache__/
+.claude/
+# Never commit personal saves
+*.sav
+*.bak
+docs/_local/
