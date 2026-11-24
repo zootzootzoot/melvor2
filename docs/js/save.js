@@ -2,7 +2,7 @@
 // Save string = Base64( Brotli( SaveWriter stream ) ). The game flushes the Brotli
 // stream without closing it, so the stream is "truncated" by design: we decode
 // with a streaming decoder and accept NeedsMoreInput at the end.
-import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611241119';
+import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611241121';
 
 let brotliReady = null;
 /** For Node tests: initialise the decoder from wasm bytes instead of fetching it. */
@@ -263,13 +263,21 @@ export async function decodeSave(input) {
     if (comps.Toolbelt) { try { readToolbelt(raw, comps.Toolbelt, tools); } catch { /* tolerate */ } }
   }
   const guild = {};
+  const pets = {};
   const stats = { simple: {}, items: {}, currencies: {} };
   for (const [id, comps] of Object.entries(ents)) {
     if (comps.MasteryGuild) { try { guild[id] = readGuild(raw, comps.MasteryGuild); } catch { /* tolerate */ } }
+    if (comps.Pets) {
+      try {
+        const r = new Reader(raw, comps.Pets.pos);
+        const n = r.i32();
+        for (let i = 0; i < n; i++) { const pid = short(r.str()); const len = r.i32(); const e = r.p + len; if (r.bool()) pets[pid] = true; r.p = e; }
+      } catch { /* tolerate */ }
+    }
     for (const [cid, c] of Object.entries(comps)) {
       if (/Statistics$/.test(cid)) { try { readStatistics(raw, c, stats); } catch { /* tolerate */ } }
     }
   }
   const components = Object.fromEntries(Object.entries(ents).map(([k, v]) => [k, Object.keys(v)]));
-  return { header, skills, bank, wallet, shop, tools, guild, stats, entities: Object.keys(ents), components };
+  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, entities: Object.keys(ents), components };
 }

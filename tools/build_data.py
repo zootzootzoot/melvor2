@@ -468,6 +468,14 @@ def main():
             skills.setdefault("_" + extra_icon, {"i": icon(res)})
     cur_icons = {short(c["Id"]): icon(c.get("Icon")) for c in O["Currency"]}
 
+    pets = {}
+    for pt in O["Pet"]:
+        tr = pt.get("Trigger") or {}
+        td = tr.get("Data") or {}
+        pets[pt["Id"]] = {"n": pt["DisplayName"], "i": icon(pt.get("Icon")), "b": bonuses_of(pt.get("Bonuses")),
+                          "skill": short((td.get("Component") or {}).get("Entity")), "scale": td.get("ScaleFactor") if short(tr.get("Type")) == "ChancePerExperience" else None,
+                          "how": re.sub(r"([a-z])([A-Z])", r" ", short(tr.get("Type")) or short((pt.get("Goal") or {}).get("Type")) or "")}
+
     # ---- icons
     from PIL import Image
     written = 0
@@ -487,7 +495,7 @@ def main():
         im.save(dst, "WEBP", lossless=True, method=6)
         written += 1
     have = set(os.listdir(os.path.join(OUT, "icons")))
-    for coll in (items.values(), methods, shop.values(), skills.values(), shop_cats.values()):
+    for coll in (items.values(), methods, shop.values(), skills.values(), shop_cats.values(), pets.values()):
         for x in coll:
             if x.get("i") and x["i"] not in have:
                 x["i"] = None
@@ -579,6 +587,8 @@ def main():
                     tasks[t["Id"]] = [pts, "l", short(dd["Component"]["Entity"]), dd["Level"]]
                 elif ty == "ItemStatistic":
                     tasks[t["Id"]] = [pts, "i", short(dd.get("Statistic")), short(dd.get("Item")), dd.get("Value", 1)]
+                elif ty == "PetUnlocked":
+                    tasks[t["Id"]] = [pts, "p", short(dd.get("Pet"))]
                 elif ty == "ValueStatistic":
                     tasks[t["Id"]] = [pts, "v", short(dd.get("Statistic")), dd.get("Value", 1)]
                 else:
@@ -594,7 +604,7 @@ def main():
             if bb and rr:
                 bonuses.append({"id": b["Id"], "n": b["DisplayName"], "rank": rr[0], "b": bb})
         for tid, row in tasks.items():
-            if row[1] in ("l", "i", "v", "u"):
+            if row[1] in ("l", "i", "v", "u", "p"):
                 row.append(human_cond(task_by_id[tid].get("ConditionGoal") or {}))
         guild[sk] = {"ranks": ranks, "tasks": tasks, "bonuses": bonuses,
                      "rankNames": {short(r["Id"]): next((x["DisplayName"] for x in O["MasteryGuildRank"] if x["Id"] == short(r["Id"])), r["Id"]) for r in cfg.get("MasteryGuildRanks") or []}}
@@ -603,7 +613,7 @@ def main():
         "v": 1,
         "gameVersion": "Alpha 0.11.5.5 (save v31)",
         "items": items, "buy": buy, "shop": shop, "methods": methods, "skills": skills, "currencies": cur_icons,
-        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild,
+        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets,
     }
     with open(os.path.join(OUT, "data", "game.json"), "w", encoding="utf-8") as f:
         json.dump(game, f, separators=(",", ":"), ensure_ascii=False)

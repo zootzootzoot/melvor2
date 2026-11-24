@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241119';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241119';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241119';
+import { decodeSave } from './save.js?v=202611241121';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241121';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241121';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -655,6 +655,7 @@ function viewTrain() {
       <div class="panel train-head">
         <div class="th-skill">${img(skillIcon(sk), '', 52)}<div><h3>${sk}</h3><div class="muted">Level <b class="text">${cur.level}</b> · ${fmtNum(cur.xp)} xp${cur.level < 99 ? ` · ${fmtNum(hi - cur.xp)} to ${cur.level + 1}` : ''}</div></div>${guildBadge(sk)}</div>
         <div class="xpbar"><i style="width:${pct}%"></i></div>
+        ${state.explorer ? '' : petLine(sk)}
         ${plan ? `
         <div class="goal">
           <span class="muted">Goal</span>
@@ -705,6 +706,15 @@ function viewTrain() {
       </div>
     </div>
   </div>`;
+}
+
+function petLine(sk) {
+  const pets = E().skillPets(sk);
+  if (!pets.length) return '';
+  return `<div class="pets"><span class="muted">Pets</span>${pets.map((p) => {
+    const fx = (p.b || []).map((b) => { const t = bonusText(b, lookup); return `${t.val} ${t.label}${t.where ? ` (${t.where})` : ''}`; }).join(', ');
+    return `<span class="pet ${p.have ? 'have' : ''}" title="${esc(fx || 'No bonus')}${p.hours && !p.have ? esc(` · expected after about ${fmtDuration(p.hours)} of ${p.via?.n || 'training'}`) : ''}">${img(p.i, '', 22)}<b>${esc(p.n)}</b>${p.have ? `<em class="green">${svg.check} found</em>` : p.hours ? `<em>~${fmtDuration(p.hours)}</em>` : ''}</span>`;
+  }).join('')}</div>`;
 }
 
 function guildSection(sk) {
@@ -794,10 +804,29 @@ function viewUpgrades() {
     <div class="seg" role="group" aria-label="Filter"><button data-upfilter="all" aria-pressed="${state.upFilter === 'all'}">All</button><button data-upfilter="now" aria-pressed="${state.upFilter === 'now'}">Can buy now</button></div>
   </div>
   ${list.length ? `<div class="up-grid stagger">${list.map(card).join('')}</div>` : `<div class="empty"><b>Nothing new within reach.</b>You own every skilling upgrade you currently qualify for.</div>`}
+  ${potionSection()}
   <details class="owned">
     <summary><b>Upgrades you own</b> <span class="muted">${owned.length} active · already counted in every rate</span></summary>
     <div class="owned-grid">${owned.map((o) => `<div class="owned-item">${img(o.i || itemIcon(o.id), '', 24)}<div><b>${esc(o.n)}</b><span>${o.b.map((b) => { const t = bonusText(b, lookup); return `${t.val} ${esc(t.label)}${t.where ? ` (${esc(t.where)})` : ''}`; }).join(' · ')}</span></div>${o.kind === 'tool' ? '<span class="pill">equipped</span>' : ''}</div>`).join('')}</div>
   </details>`;
+}
+
+function potionSection() {
+  const e = E();
+  const list = e.potionAdvice();
+  if (!list.length) return '';
+  return `<div class="section-sub" style="margin-top:26px"><h4>Potions worth drinking</h4><span class="muted" style="font-size:13px">Potions you can brew or already own, measured on your best method. Their cost is what each one costs you to make, times how many you use.</span></div>
+  <div class="pot-list stagger">${list.map((x) => {
+    const fx = x.it.tb.map((b) => bonusText(b, lookup));
+    return `<div class="pot-row" data-item="${esc(x.id)}">
+      ${img(x.it.i, '', 32)}
+      <div class="title"><b>${esc(x.it.n)}</b><span class="sub">${img(skillIcon(x.skill), '', 14)}${x.skill}<span class="sep">·</span>${fx.map((f) => `${f.val} ${esc(f.label)}`).join(', ')}</span></div>
+      <div class="pot-k"><small>gold / hr</small><b class="num ${x.dGp > 0 ? 'green' : 'muted'}">${x.dGp > 0 ? '+' + fmtGp(x.dGp) : '—'}</b></div>
+      <div class="pot-k"><small>xp / hr</small><b class="num ${x.dXp > 0.0005 ? 'green' : 'muted'}">${x.dXp > 0.0005 ? '+' + fmtPct(x.dXp, 1) : '—'}</b></div>
+      <div class="pot-k"><small>uses ${fmtNum(x.perHour)}/hr</small><b class="num red">−${fmtGp(x.costHr)}</b></div>
+      <div class="pot-k"><small>net gold</small><b class="num ${x.net > 0 ? 'gold' : 'red'}">${fmtGp(x.net, { sign: true })}</b></div>
+    </div>`;
+  }).join('')}</div>`;
 }
 
 // ---------------------------------------------------------------- bank

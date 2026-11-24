@@ -110,7 +110,7 @@ export class Engine {
   name(item) { return this.items[item]?.n ?? item; }
 
   // ---------------------------------------------------------------- player
-  setPlayer(p, { extraShop = [], useMods = this.useMods } = {}) {
+  setPlayer(p, { extraShop = [], extraTools = [], useMods = this.useMods } = {}) {
     this.p = p;
     this.useMods = useMods;
     this.levels = {};
@@ -118,7 +118,8 @@ export class Engine {
     this.bank = p.bank || {};
     this.shopOwned = { ...(p.shop || {}) };
     for (const id of extraShop) this.shopOwned[id] = Math.max(1, this.shopOwned[id] || 0);
-    this.tools = p.tools || {};
+    this.tools = { ...(p.tools || {}) };
+    for (const id of extraTools) this.tools[id] = 1;
     this._cache = new Map();
     this._rateCache = new Map();
     this.computeGuilds(p);
@@ -137,6 +138,9 @@ export class Engine {
     for (const id of Object.keys(this.tools)) {
       const it = this.items[id];
       if (it?.tb) this.sources.push({ kind: 'tool', id, n: it.n, i: it.i, b: it.tb });
+    }
+    for (const [id, pet] of Object.entries(this.g.pets || {})) {
+      if ((p.pets?.[id] || p.allGuild) && pet.b?.length) this.sources.push({ kind: 'pet', id, n: pet.n, i: pet.i, b: pet.b });
     }
     this.bIndex = new Map();
     for (const src of this.sources) {
@@ -169,6 +173,7 @@ export class Engine {
         else if (t[1] === 'l') st = (this.levels[t[2]] ?? 1) >= t[3];
         else if (t[1] === 'i') st = (p.stats?.items?.[t[2]]?.[t[3]] ?? 0) >= t[4];
         else if (t[1] === 'v') st = (p.stats?.simple?.[t[2]] ?? 0) >= t[3];
+        else if (t[1] === 'p') st = !!p.pets?.[t[2]];
         if (st) { lo += pts; hi += pts; } else if (st === null) hi += pts;
       }
       const need = (rank) => Math.ceil(total * (gd.ranks[rank] ?? 0));
@@ -234,6 +239,11 @@ export class Engine {
         text = `Get ${t[4].toLocaleString('en-US')} ${this.name(t[3])} from ${skill}`;
         max = t[4]; prog = Math.min(max, this.p.stats?.items?.[t[2]]?.[t[3]] ?? 0); status = prog >= max;
         if (!status && /ItemGained$/.test(t[2])) { const b = this.taskRate(skill, { t: 'ActionGainItem', it: t[3] }); if (b) est = { hours: (max - prog) / b.perHour, m: b.m }; }
+      } else if (kind === 'p') {
+        const pet = this.g.pets?.[t[2]];
+        text = `Find ${pet?.n || t[2]}`; status = !!this.p.pets?.[t[2]];
+        const best = pet?.scale && SKILL_ORDER.includes(pet.skill) ? this.trainOptions(pet.skill)[0] : null;
+        if (!status && best) est = { hours: pet.scale / best.xph, m: best.m };
       } else if (kind === 'v') { text = t[4]; max = t[3]; prog = Math.min(max, this.p.stats?.simple?.[t[2]] ?? 0); status = prog >= max; }
       else { text = t[3] || t[2]; status = this.p.allGuild ? true : null; }
       out.push({ id, pts, kind, text, done: status, prog, max, est });
@@ -252,6 +262,14 @@ export class Engine {
     let pts = 0, hours = 0;
     for (const t of open) { if (pts >= need) break; pick.push(t); pts += t.pts; hours += t.est.hours; }
     return { need, pick, hours: pts >= need ? hours : Infinity, reachable: pts >= need, open };
+  }
+
+  /** Pets that come from training a skill, with whether you have them and expected hours at your best XP rate. */
+  skillPets(sk) {
+    const best = this.trainOptions(sk)[0];
+    return Object.entries(this.g.pets || {}).filter(([, p]) => p.skill === sk).map(([id, p]) => ({
+      id, ...p, have: !!this.p.pets?.[id], hours: p.scale && best ? p.scale / best.xph : null, via: best?.m,
+    }));
   }
 
   guildName(skill, rank) {
@@ -915,6 +933,42 @@ export class Engine {
     }
     out.sort((a, b) => (a.gap > 0) - (b.gap > 0) || (b.dGp > 0) - (a.dGp > 0) || a.payback - b.payback || b.dXp - a.dXp);
     this._cache.set('advice', out);
+    return out;
+  }
+
+  /** Potions you can brew (or already own) that would raise your best rate in their skill, net of what they cost to use. */
+  potionAdvice() {
+    if (this._cache.has('potions')) return this._cache.get('potions');
+    const brewable = new Set(this.unlockedMethods().filter((m) => m.s === 'Herblore').map((m) => m.primary));
+    const { costs } = this.solveChains();
+    const base = new Map();
+    const bestOf = (eng, sk) => ({ money: eng.ranked('best', { skill: sk })[0], train: eng.trainOptions(sk)[0] });
+    const out = [];
+    for (const [id, it] of Object.entries(this.items)) {
+      if (!it.tb || !/Potion$/.test(it.slot || '') || this.tools[id]) continue;
+      if (!brewable.has(id) && !(this.bank[id] > 0)) continue;
+      const skills = [...new Set(it.tb.map(([, , , ctx]) => ctx.e).filter((x) => SKILL_ORDER.includes(x)))];
+      if (!skills.length) continue;
+      const sk = skills[0];
+      if (!base.has(sk)) base.set(sk, bestOf(this, sk));
+      const b0 = base.get(sk);
+      const alt = Object.create(Engine.prototype);
+      Object.assign(alt, this);
+      alt.setPlayer(this.p, { extraShop: [], extraTools: [id], useMods: true });
+      const b1 = bestOf(alt, sk);
+      const m = b1.money?.m || b1.train?.m;
+      if (!m) continue;
+      const r = alt.rate(m);
+      const ticks = r.aph * (r.extra?.hits || r.extra?.stepsTaken || 1); // potions are used per action tick
+      const each = costs.get(id)?.total ?? (this.buyPrice(id) < Infinity ? this.buyPrice(id) : this.value(id));
+      const costHr = ticks * each;
+      const dGp = (b1.money?.gph ?? 0) - (b0.money?.gph ?? 0);
+      const dXp = b0.train?.xph ? b1.train.xph / b0.train.xph - 1 : 0;
+      if (dGp <= 0 && dXp <= 0.001) continue;
+      out.push({ id, it, skill: sk, dGp, dXp, net: dGp - costHr, costHr, perHour: ticks, each, have: this.bank[id] || 0, before: b0, after: b1 });
+    }
+    out.sort((a, b) => b.net - a.net || b.dXp - a.dXp);
+    this._cache.set('potions', out);
     return out;
   }
 

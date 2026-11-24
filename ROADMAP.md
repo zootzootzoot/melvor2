@@ -11,6 +11,7 @@ What players would pay for, ordered by value versus effort. Done items stay list
 - Bank: process first, safe to sell, full contents
 - Item lookup (Ctrl K), next unlocks, progress since last import, copy summary, level-99 explorer
 - Hunting (survey, track, trap with trap costs) in money makers, training and guild tasks; Ranching as passive per-animal income
+- Pets: bonuses from found pets, expected time to each pet, pet guild tasks; potion advisor (net gain after potion cost)
 - Guild task planner: every task with live progress, time estimates, and the fastest set of tasks to the next rank (in Training)
 
 ## Up next, in order
