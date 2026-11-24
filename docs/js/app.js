@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241056';
-import { Engine, SKILL_ORDER, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241056';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241056';
+import { decodeSave } from './save.js?v=202611241059';
+import { Engine, SKILL_ORDER, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241059';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241059';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -123,12 +123,16 @@ function recordHistory(save) {
   return { list, prev, cur: snap };
 }
 
-function startExplorer() {
+function explorerSave() {
   const skills = {};
   for (const m of state.game.methods) for (const r of m.r) if (r.t === 'lvl') skills[r.s] = { xp: xpForLevel(99), level: 99 };
   const shop = {};
   for (const id of Object.keys(state.game.shop)) shop[id] = 1;
-  state.save = { header: { name: 'Explorer', gamemode: 'Every skill at 99', totalLevel: Object.keys(skills).length * 99, gp: 0, timestamp: new Date() }, skills, bank: {}, wallet: {}, shop, tools: {}, allGuild: true };
+  return { header: { name: 'Explorer', gamemode: 'Every skill at 99', totalLevel: Object.keys(skills).length * 99, gp: 0, timestamp: new Date() }, skills, bank: {}, wallet: {}, shop, tools: {}, allGuild: true };
+}
+
+function startExplorer() {
+  state.save = explorerSave();
   state.explorer = true;
   state.history = null;
   applyPlayer();
@@ -177,7 +181,9 @@ function renderLanding(error) {
       </div>
       <input type="file" id="file-input" accept=".sav,.bak,.txt" hidden />
     </div>
-  </section>`;
+  </section>
+  <section class="teaser" id="teaser" aria-label="Preview"></section>`;
+  setTimeout(renderTeaser, 60);
 
   const ta = $('#save-input');
   const go = async (input) => {
@@ -212,6 +218,24 @@ function renderLanding(error) {
   });
   drop.addEventListener('dblclick', () => $('#file-input').click());
   $('#file-input').onchange = async (e) => { const f = e.target.files?.[0]; if (f) go(await f.arrayBuffer()); };
+}
+
+function renderTeaser() {
+  const el = $('#teaser');
+  if (!el) return;
+  const e = new Engine(G());
+  e.setPlayer(explorerSave());
+  const money = e.ranked('chain').slice(0, 5);
+  const afk = e.ranked('afk', { window: 8 }).slice(0, 3);
+  const max = money[0]?.gph || 1;
+  const train = ['Woodcutting', 'Mining', 'Smithing', 'Cooking'].map((k) => ({ k, o: e.trainOptions(k)[0] })).filter((x) => x.o);
+  el.innerHTML = `
+    <div class="teaser-head"><span class="eyebrow">A taste, with every skill at 99</span><p>Import your save and these become <em>your</em> numbers, from your own levels, upgrades and bank.</p></div>
+    <div class="teaser-grid stagger">
+      <div class="panel tz"><h4>Top money makers</h4>${money.map((x) => `<div class="tz-row">${img(methodIcon(x.m), '', 26)}<span><b>${esc(x.m.n)}</b><small>${img(skillIcon(x.m.s), '', 12)}${x.m.s}</small></span><span class="tz-v"><b class="num">${fmtGp(x.gph)}</b><i style="width:${(x.gph / max) * 100}%"></i></span></div>`).join('')}</div>
+      <div class="panel tz"><h4>Leave running for 8 hours</h4>${afk.map((x) => `<div class="tz-row">${img(methodIcon(x.m), '', 26)}<span><b>${esc(x.m.n)}</b><small>${img(skillIcon(x.m.s), '', 12)}${x.m.s}</small></span><span class="tz-v"><b class="num">${fmtGp(x.total)}</b></span></div>`).join('')}
+        <h4 style="margin-top:14px">Fastest XP</h4>${train.slice(0, 2).map((x) => `<div class="tz-row">${img(methodIcon(x.o.m), '', 26)}<span><b>${esc(x.o.m.n)}</b><small>${img(skillIcon(x.k), '', 12)}${x.k}</small></span><span class="tz-v"><b class="num blue">${fmtGp(x.o.xph)}</b><small>xp/hr</small></span></div>`).join('')}</div>
+    </div>`;
 }
 
 // ---------------------------------------------------------------- dashboard
@@ -260,6 +284,7 @@ function renderDashboard() {
       <div class="profile-meta">
         <span class="pill">${esc(s.header.gamemode || 'Standard')}</span>
         ${state.explorer ? '<span class="pill gold">All skills 99 · every shop upgrade</span>' : `<span class="pill">Saved ${esc(ago)}</span>`}
+        ${state.explorer ? '' : `<button class="pill btn-pill" id="copy-sum" title="Copy a short summary to paste into Discord">${svg.paste} Copy summary</button>`}
         ${delta ? `<span class="pill green" title="Compared with your previous import (${esc(relTime(prev.t))})">${svg.up} Since ${esc(relTime(prev.t))}: ${delta.tl > 0 ? `+${delta.tl} levels · ` : ''}${fmtGp(delta.xp)} xp · ${fmtGp(delta.gp + delta.bank, { sign: true })} worth</span>` : ''}
       </div>
     </div>
@@ -284,6 +309,19 @@ function renderDashboard() {
   <div id="view"></div>`;
 
   countUp(app);
+  const cs = $('#copy-sum');
+  if (cs) cs.onclick = async () => {
+    const top = e.ranked('best')[0], scratch = e.ranked('chain')[0], afk = e.ranked('afk', { window: 8 })[0];
+    const lines = [
+      `${s.header.name} · total level ${s.header.totalLevel} · bank ${fmtGp(bv.total)}`,
+      top ? `Best money maker: ${top.m.n} ${fmtGp(top.gph)} gp/hr${top.src === 'bank' ? ` (from bank, ${fmtDuration(top.bank.hours)})` : ''}` : '',
+      scratch && scratch !== top ? `Best from scratch: ${scratch.m.n} ${fmtGp(scratch.gph)} gp/hr` : '',
+      afk ? `Best to leave running 8h: ${afk.m.n} ${fmtGp(afk.total)}` : '',
+      adv ? `Next upgrade: ${adv.s.n} (+${fmtGp(adv.dGp)} gp/hr, pays back in ${fmtDuration(adv.payback)})` : '',
+      location.origin + location.pathname,
+    ].filter(Boolean);
+    try { await navigator.clipboard.writeText(lines.join('\n')); toast('Summary copied'); } catch { toast('Could not copy to the clipboard'); }
+  };
   tabsEl.onclick = (ev) => {
     const b = ev.target.closest('[data-tab]');
     if (!b) return;
@@ -692,7 +730,10 @@ function viewUpgrades() {
   if (state.upSort === 'gain') list = list.slice().sort((a, b) => b.dGp - a.dGp || b.dXp - a.dXp);
   if (state.upSort === 'xp') list = list.slice().sort((a, b) => b.dXp - a.dXp);
   const owned = e.sources;
+  const earner = e.ranked('chain')[0];
   const card = (a) => {
+    const shortGp = Math.max(0, a.gpCost - wallet);
+    const afford = shortGp > 0 && earner?.gph > 0 ? `<div class="uc-afford">${svg.clock} About <b>${fmtDuration(shortGp / earner.gph)}</b> of ${esc(earner.m.n)} to afford it</div>` : '';
     const fx = a.s.b.map((b) => bonusText(b, lookup));
     const status = a.gap ? `<span class="pill warn">${svg.lock}Needs ${a.missing.map((m) => esc(m.text)).join(', ')}</span>`
       : a.affordable ? `<span class="pill green">${svg.check}Can buy now</span>`
@@ -710,6 +751,7 @@ function viewUpgrades() {
         <div><div class="k">Pays back</div><div class="v num">${Number.isFinite(a.payback) ? fmtDuration(a.payback) : '—'}</div></div>
       </div>
       <div class="uc-cost"><span class="muted">Cost</span>${a.gpCost ? `<span>${img(g.currencies.GoldPieces, '', 16)}<b class="num">${fmtNum(a.gpCost)}</b></span>` : ''}${a.s.ci.map(([it, q]) => `<span data-item="${esc(it)}" class="${(e.bank[it] || 0) >= q ? '' : 'short'}">${img(itemIcon(it), '', 16)}<b class="num">${fmtNum(q)}</b></span>`).join('')}${a.otherCur.map(([c, q]) => `<span>${img(g.currencies[c], '', 16)}<b class="num">${fmtNum(q)}</b></span>`).join('')}</div>
+      ${afford}
       ${a.after?.money && a.dGp > 0 ? `<div class="uc-foot">Measured on <b>${esc(a.after.money.m.n)}</b>: ${fmtGp(a.before.gph)} → <b class="gold">${fmtGp(a.after.gph)}</b> gp/hr</div>` : ''}
     </article>`;
   };
@@ -728,8 +770,8 @@ function viewUpgrades() {
 
 // ---------------------------------------------------------------- bank
 function viewBank() {
-  const sub = `<div class="seg bank-switch" role="tablist"><button data-bankview="process" aria-pressed="${state.bankView === 'process'}">Process first</button><button data-bankview="all" aria-pressed="${state.bankView === 'all'}">Everything</button></div>`;
-  return state.bankView === 'all' ? viewBankAll(sub) : viewAlchemy(sub);
+  const sub = `<div class="seg bank-switch" role="tablist"><button data-bankview="process" aria-pressed="${state.bankView === 'process'}">Process first</button><button data-bankview="sell" aria-pressed="${state.bankView === 'sell'}">Safe to sell</button><button data-bankview="all" aria-pressed="${state.bankView === 'all'}">Everything</button></div>`;
+  return state.bankView === 'all' ? viewBankAll(sub) : state.bankView === 'sell' ? viewSafeSell(sub) : viewAlchemy(sub);
 }
 
 function viewAlchemy(sub) {
@@ -752,6 +794,35 @@ function viewAlchemy(sub) {
       <div class="alch-foot"><span>${fmtDuration(a.b.hours)} of ${esc(m.s.toLowerCase())} · ${fmtGp(a.b.gpPerHour)}/hr</span>${ratio > 1.05 ? `<span class="mult">${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}× the value</span>` : ''}</div>
     </article>`;
   }).join('')}</div>` : `<div class="empty"><b>No profitable processing for your current bank.</b>Your stacks are already worth the most as they are.</div>`}`;
+}
+
+/** Items no skill uses (now or soon), that aren't gear, food or tools: free bank slots. */
+function viewSafeSell(sub) {
+  const e = E();
+  const keepCaps = new Set(['Equipment', 'Weapon', 'Food', 'Toolbelt', 'Openable', 'HuntingTrap', 'FishingBait', 'Compost', 'Bury']);
+  const shopNeeds = new Set(Object.entries(G().shop).filter(([id]) => !(e.shopOwned[id] > 0)).flatMap(([, s]) => s.ci.map(([i]) => i)));
+  const rows = [];
+  for (const [it, qty] of Object.entries(e.bank)) {
+    const item = e.items[it];
+    if (!item || item.c?.some((c) => keepCaps.has(c))) continue;
+    const uses = e.consumers.get(it) || [];
+    if (shopNeeds.has(it)) continue;
+    const soon = uses.filter((m) => { const st = e.status(m); return st.unlocked || (st.onlyLevelLocked && st.levelGap <= 15); });
+    if (soon.length) continue;
+    const later = uses.length ? uses.reduce((a, m) => Math.min(a, m.lv), 99) : null;
+    rows.push({ it, qty, total: qty * e.value(it), later, uses: uses.length });
+  }
+  rows.sort((a, b) => b.total - a.total);
+  const total = rows.reduce((a, r) => a + r.total, 0);
+  return `
+  <div class="section-head"><div><h2>Bank</h2><p>Stacks that no skill you have (or will have within 15 levels) uses, and no shop upgrade needs. Selling them frees ${fmtNum(rows.length)} bank slots for <b class="gold">${fmtGp(total)}</b>. Combat drops, quest items and anything for Hunting or Ranching aren't checked, so look before you sell those.</p></div>${sub}</div>
+  ${rows.length ? `<div class="sell-list stagger">${rows.map((r) => `
+    <button class="sell-row" data-item="${esc(r.it)}">
+      ${img(itemIcon(r.it), '', 30)}
+      <span class="title"><b>${esc(e.name(r.it))}</b><span class="sub">${r.uses ? `only used from level ${r.later}` : 'no known use'}</span></span>
+      <span class="num muted">${fmtNum(r.qty)} × ${fmtGp(e.value(r.it))}</span>
+      <span class="num gold">${fmtGp(r.total)}</span>
+    </button>`).join('')}</div>` : `<div class="empty"><b>Nothing to clear out.</b>Everything in your bank has a use.</div>`}`;
 }
 
 function viewBankAll(sub) {

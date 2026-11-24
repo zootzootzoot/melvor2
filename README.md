@@ -15,11 +15,12 @@ Everything runs in the browser. Your save is decoded locally and never uploaded.
   - **Leave it running.** Single actions to leave going for 1 to 24 hours (gathering, or working through your bank), ranked by total gold over that time. Accounts for stock running out.
   - **Value added.** The best crafts, with inputs priced at their sell value.
 - **Training.** For each skill: the fastest route to a target level, switching methods as better ones unlock. Shows total time, the gold it makes or costs, and the supplies it needs against what you have. Also lists every way to train the skill at any level, plus your mastery guild rank and what the next rank unlocks.
-- **Upgrades.** Every shop upgrade you can buy next, priced against what it earns. Each card shows the gain in gold/hr and XP/hr on your best method for that skill, the payback time, and whether you can afford it now. Also lists every upgrade you own and what it does.
-- **Bank.** *Process first* shows what to turn each stack into before selling, and how much extra that earns. *Everything* shows your bank's value, with sorting and search.
+- **Upgrades.** Every shop upgrade you can buy next, priced against what it earns. Each card shows the gain in gold/hr and XP/hr on your best method for that skill, the payback time, whether you can afford it now, and how long your best method takes to earn the rest. Also lists every upgrade you own and what it does.
+- **Bank.** *Process first* shows what to turn each stack into before selling, and how much extra that earns. *Safe to sell* lists stacks nothing you can do (now or within 15 levels) uses, so you can free bank slots. *Everything* shows your bank's value, with sorting and search.
 - **Next unlocks.** The most lucrative methods you're a few levels away from, with the XP and estimated time to get there.
 - **Item lookup** (Ctrl K, or click any item icon). Where an item comes from, what it's used for, its value, how much you have, and what it does when equipped.
-- **Explore at 99.** A sandbox with every skill at 99 and every upgrade, for browsing without a save.
+- **Copy summary.** One click copies your best money maker, best idle action and next upgrade, ready to paste into Discord.
+- **Explore at 99.** A sandbox with every skill at 99 and every upgrade, for browsing without a save. The landing page previews it.
 
 ## Layout
 
