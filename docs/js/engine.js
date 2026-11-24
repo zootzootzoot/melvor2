@@ -7,12 +7,15 @@ export const BASE_STUN_MS = 2000; // ThievingActionComponent.BaseStunInterval
 
 export const SKILL_ORDER = [
   'Woodcutting', 'Fishing', 'Mining', 'Thieving', 'Cooking', 'Smithing', 'Crafting', 'Fletching',
-  'Runecrafting', 'Herblore', 'Beastcrafting', 'Firemaking', 'Farming',
+  'Runecrafting', 'Herblore', 'Beastcrafting', 'Firemaking', 'Hunting', 'Farming', 'Ranching',
 ];
+/** Skills whose methods run passively (per plot / per animal), so they aren't trained or ranked as actions. */
+export const PASSIVE_SKILLS = new Set(['Farming', 'Ranching']);
 
 const STATS_TYPE = {
   Woodcutting: 'WoodcuttingAction', Mining: 'MiningAction', Fishing: 'FishingAction', Thieving: 'ThievingAction',
   Cooking: 'CookingAction', Herblore: 'HerbloreAction', Firemaking: 'FiremakingAction', Farming: 'FarmingAction',
+  Hunting: 'HuntingAction', Ranching: 'RanchingAction',
 };
 const statsTypeOf = (skill) => STATS_TYPE[skill] || 'ArtisanAction';
 const STAT_GROUPS = { PercentInterval: 'GlobalPercentActionInterval', FlatInterval: 'GlobalFlatActionInterval' };
@@ -195,6 +198,8 @@ export class Engine {
           if ((!q.tt || m.rt === q.tt) && (!q.loc || m.cat === q.loc)) consider(m, r.aph * r.succ); break;
         case 'ActionGainItem': { const o = r.outs.find(([it]) => it === q.it); if (o) consider(m, o[1]); break; }
         case 'ActionGainItemValue': consider(m, r.outValue - r.gp); break;
+        case 'HuntingTrapAnimal': if (match(m)) consider(m, r.aph); break;
+        case 'HuntingTrapAnimalLocation': if (!q.loc || m.locId === q.loc) consider(m, r.aph); break;
         default: break;
       }
     }
@@ -220,7 +225,7 @@ export class Engine {
       } else if (kind === 't') { text = 'Trigger: ' + t[2]; status = trig.has(id); }
       else if (kind === 'l') {
         text = t[4]; max = t[3]; prog = Math.min(max, this.levels[t[2]] ?? 1); status = prog >= max;
-        if (!status && SKILL_ORDER.includes(t[2]) && t[2] !== 'Farming') {
+        if (!status && SKILL_ORDER.includes(t[2]) && !PASSIVE_SKILLS.has(t[2])) {
           const pl = this.planLevel(t[2], t[3]);
           if (Number.isFinite(pl.hours)) est = { hours: pl.hours, m: pl.segs[0]?.m };
         }
@@ -471,6 +476,37 @@ export class Engine {
       const d = clamp01(M('DoublingChance'));
       for (const [it, q, ch] of x.pr) add(it, ch * prodQty(q, it) * (1 + d));
       extra = { batch: p + h + s + b * x.n, bottles: x.n, preserve: pres };
+    } else if (x.t === 'hunt') {
+      const iv = (b, f, pct) => Math.floor((b + f) * (1 + pct));
+      const rng = (lo, hi, kind) => {
+        const f = M('Flat' + kind + 'Interval'), pc = M('Percent' + kind + 'Interval');
+        let a = iv(lo, f + M('FlatMin' + kind + 'Interval'), pc + M('PercentMin' + kind + 'Interval'));
+        let b = iv(hi, f + M('FlatMax' + kind + 'Interval'), pc + M('PercentMax' + kind + 'Interval'));
+        if (b < a) b = a;
+        return (a + b) / 2;
+      };
+      const track = rng(x.tmin, x.tmax, 'Tracking'), trap = rng(x.pmin, x.pmax, 'Trapping');
+      const sv = iv(x.sv, M('FlatSurveyInterval'), M('PercentSurveyInterval'));
+      const tc = clamp01(x.tc + M('FlatTrackingSuccessChance') + x.tc * M('IncreasedTrackingSuccessChance'));
+      const pc = Math.max(0.01, clamp01(x.pc + M('FlatTrappingSuccessChance') + x.pc * M('IncreasedTrappingSuccessChance')));
+      const fs = Math.trunc(M('FlatTrackingSteps'));
+      const smin = Math.max(1, x.smin + fs + Math.trunc(M('FlatMinTrackingSteps')));
+      const smax = Math.max(smin, x.smax + fs + Math.trunc(M('FlatMaxTrackingSteps')));
+      const skip = clamp01(M('SkipTrackingStepChance'));
+      let steps = 0;
+      for (let n = smin; n <= smax; n++) steps += stepsWithSkip(n, skip);
+      steps /= smax - smin + 1;
+      const surveys = 1 + (1 - tc) + (1 - tc) * (1 - tc); // the third survey always finds tracks
+      const attempts = 1 / pc;
+      const re = clamp01(M('TrappingReattemptChance'));
+      ms = surveys * sv + steps * track + attempts * trap + (attempts - 1) * (1 - re) * stepsWithSkip(smin, skip) * track;
+      const pres = clamp01(M('PreservationChance'));
+      ins = x.trap ? [[x.trap, attempts * (1 - pres)]] : [];
+      const d = clamp01(M('DoublingChance'));
+      for (const [it, q, ch] of x.pr) add(it, ch * prodQty(q, it) * (1 + d));
+      for (const [it, q, ch] of x.sp) add(it, surveys * ch * prodQty(q, it) * (1 + d));
+      xp = m.xp + (x.svXp || 0) * surveys;
+      extra = { surveys, steps, attempts, trapChance: pc, trackChance: tc };
     } else if (x.t === 'fm') {
       ms = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
       const pres = clamp01(M('PreservationChance'));

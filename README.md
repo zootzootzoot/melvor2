@@ -84,7 +84,7 @@ Rates use the game's own stat computers and action handlers, with your bonuses a
 - equipped toolbelt items;
 - mastery guild rank rewards.
 
-Each bonus applies where its context matches: skill, recipe, category, subcategory, product item or fishing location. Potion, pet, astrology and agility bonuses are not applied yet.
+Each bonus applies where its context matches: skill, recipe, category, subcategory, product item or fishing location. Potion, pet, astrology and agility bonuses are not applied yet. Combat isn't modelled.
 
 | Skill | Model |
 |---|---|
@@ -96,7 +96,9 @@ Each bonus applies where its context matches: skill, recipe, category, subcatego
 | Smithing, Crafting, Fletching, Runecrafting, Beastcrafting | Interval × expected actions per craft (steps with skip-step chance). Preservation reduces ingredient use. Doubling and flat/percent quantity apply per product. |
 | Herblore | One brew is prepare + heat + stir, then **10 bottlings**. Each bottling spends ingredients and yields products + XP, so time per potion = `(prepare + heat + stir)/10 + bottling`. |
 | Firemaking | Interval, preservation, by-product chances, and currency rewards with doubling. |
+| Hunting | Per animal caught: surveys until tracks are found (the third always succeeds), tracking steps (random between min and max, with skip chance), then trap attempts at the trap success chance. Each attempt uses one trap (the cheapest of the animal's trap type) unless preserved. A failed attempt re-tracks the minimum steps unless you reattempt. |
 | Farming | Passive, per plot (base rates). |
+| Ranching | Passive, per adult animal per product interval, before happiness, variant and feed bonuses. |
 
 - **From scratch** uses a Dinkelbach-style fixed point. Your time is valued at the best rate you can reach (λ gp/ms). Each item's cost is then `min(shop price, Σ input costs + λ·time − by-product value)`, relaxed until it stops changing.
 - **Mastery guild ranks** come from task points. Goal and trigger tasks are read from the save. Level, item-statistic and value-statistic conditions are evaluated. Anything else counts toward an upper bound only, and a requirement that falls between the bounds shows as "probably".

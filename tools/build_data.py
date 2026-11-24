@@ -410,6 +410,48 @@ def main():
         push("Farming", r, "passive", r["BaseInterval"], r["BaseExperience"], iq(r["Ingredients"]["Items"]), outs,
              extra={"note": "per plot, passive"})
 
+    # Hunting: survey (3rd always succeeds) -> track N steps -> trap attempts; each attempt uses a trap.
+    hunt_loc = {c["Id"]: c for c in O["HuntingLocation"]}
+    traps_by_type = {}
+    for it in O["Item"]:
+        cap = (it.get("Capabilities") or {}).get(NS + "HuntingTrap")
+        if cap:
+            traps_by_type.setdefault(short(cap["TrapType"]), []).append((it["SellsFor"]["Quantity"], it["Id"]))
+    for a in O["HuntingAnimal"]:
+        loc = hunt_loc.get(short(a["Location"]), {})
+        if not loc or "Quest" in loc.get("Id", ""):
+            continue
+        trap = sorted(traps_by_type.get(short(a.get("TrapType")), [(0, None)]))[0][1]
+        outs = {}
+        for p_ in a["Products"]:
+            addmap(outs, {short(p_["Item"]): p_["Quantity"] * p_["Chance"]})
+        r = {"Id": a["Id"], "DisplayName": a["DisplayName"], "Icon": a.get("Icon"), "Category": a["Location"],
+             "Requirements": (a.get("Requirements") or []) + (loc.get("Requirements") or [])}
+        push("Hunting", r, "active", (a["BaseMinTrapInterval"] + a["BaseMaxTrapInterval"]) / 2 / a["BaseTrapSuccessChance"],
+             a["BaseExperience"], [[trap, 1 / a["BaseTrapSuccessChance"]]] if trap else [], outs,
+             extra={"loc": loc.get("DisplayName"), "locId": short(a["Location"]), "note": "per animal caught",
+                    "x": {"t": "hunt", "sv": loc.get("BaseSurveyInterval", 4000), "svXp": loc.get("BaseSurveyingExperience", 0),
+                          "tc": a["BaseTrackSuccessChance"], "pc": a["BaseTrapSuccessChance"],
+                          "smin": a["BaseMinTrackingSteps"], "smax": a["BaseMaxTrackingSteps"],
+                          "tmin": a["BaseMinTrackInterval"], "tmax": a["BaseMaxTrackInterval"],
+                          "pmin": a["BaseMinTrapInterval"], "pmax": a["BaseMaxTrapInterval"],
+                          "pr": iqc(a["Products"]), "sp": iqc(a.get("SurveyingProducts")), "trap": short(trap)}})
+
+    # Ranching: passive, per adult animal per product interval (before happiness, variants and feed bonuses).
+    encl_lvl = {}
+    for en in O["RanchingEnclosure"]:
+        lv = min([q["Data"]["Level"] for q in en.get("Requirements") or [] if short(q["Type"]) == "Level"] or [1])
+        for an in en.get("Animals") or []:
+            encl_lvl[short(an)] = min(encl_lvl.get(short(an), 99), lv)
+    for a in O["RanchingAnimal"]:
+        hrs = a["ProductInterval"] / 3_600_000
+        dn = a["DisplayName"]
+        r = {"Id": a["Id"], "DisplayName": (dn["Singular"] if isinstance(dn, dict) else dn), "Icon": a.get("Icon"),
+             "Category": a.get("Category"), "Requirements": [{"Type": NS + "Level", "Data": {"Component": {"Entity": NS + "Ranching"}, "Level": encl_lvl.get(a["Id"], 1)}}]}
+        push("Ranching", r, "passive", a["ProductInterval"], a["BaseExperience"], iq((a.get("Eats") or [])), {short(p_["Item"]): p_["Quantity"] for p_ in a["Products"]},
+             extra={"note": "per adult animal, passive", "buy": next((c["Quantity"] for c in (a.get("PurchaseCosts") or {}).get("Currencies") or [] if short(c["Currency"]) == "GoldPieces"), 0),
+                    "life": a.get("LifespanInterval")})
+
     for m in methods:
         if m.get("note") is None:
             m.pop("note", None)
@@ -467,7 +509,7 @@ def main():
         n = dd.get("MaxProgress", 1)
         q = {"t": ty, "n": n}
         for k, key in (("Recipe", "r"), ("Category", "cat"), ("Subcategory", "sub"), ("Item", "it"), ("Location", "loc"),
-                       ("TargetType", "tt"), ("GoalCategory", "gc")):
+                       ("TargetType", "tt"), ("GoalCategory", "gc"), ("Animal", "r")):
             if dd.get(k):
                 q[key] = short(dd[k])
         ent = short((dd.get("Component") or {}).get("Entity")) or sk
@@ -497,6 +539,8 @@ def main():
             "WoodcuttingDamageTree": f"Deal {num} damage to trees",
             "WoodcuttingInstantCut": f"Instantly fell {num} trees",
             "MiningEarlyBreak": f"Break {num} rocks early",
+            "HuntingTrapAnimal": f"Trap {num} {what or 'animals'}",
+            "HuntingTrapAnimalLocation": f"Trap {num} animals in {human(q.get('loc'))}",
         }.get(ty) or f"{human(ty)} x{num}"
         return q, text
 

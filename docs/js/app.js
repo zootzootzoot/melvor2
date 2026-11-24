@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241116';
-import { Engine, SKILL_ORDER, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241116';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241116';
+import { decodeSave } from './save.js?v=202611241119';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241119';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241119';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -301,7 +301,7 @@ function renderDashboard() {
       const lo = xpForLevel(v.level), hi = xpForLevel(v.level + 1);
       const pct = v.level >= 99 ? 100 : Math.max(0, Math.min(100, ((v.xp - lo) / (hi - lo)) * 100));
       const d = lvlDelta(k);
-      if (k === 'Farming') return `<span class="skill-chip" title="${esc(k)} · ${fmtNum(v.xp)} xp">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}${d > 0 ? `<em class="up">+${d}</em>` : ''}</div><div class="nm">${esc(k)}</div></div><span class="bar" style="width:${pct}%"></span></span>`;
+      if (PASSIVE_SKILLS.has(k)) return `<span class="skill-chip" title="${esc(k)} · ${fmtNum(v.xp)} xp">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}${d > 0 ? `<em class="up">+${d}</em>` : ''}</div><div class="nm">${esc(k)}</div></div><span class="bar" style="width:${pct}%"></span></span>`;
       return `<button class="skill-chip" data-train="${esc(k)}" title="${esc(k)} · ${fmtNum(v.xp)} xp · open in Training">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}${d > 0 ? `<em class="up">+${d}</em>` : ''}</div><div class="nm">${esc(k)}</div></div><span class="bar" style="width:${pct}%"></span></button>`;
     }).join('')}
     ${others.length ? `<span class="strip-sep"></span>` + others.map(([k, v]) => `<span class="skill-chip dim" title="${esc(k)} · not modelled yet">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}</div><div class="nm">${esc(k)}</div></div></span>`).join('') : ''}
@@ -569,7 +569,7 @@ function details(x) {
         <span>From scratch <b class="num">${fmtGp(x.src === 'bank' ? x.chain.gpPerHour : x.gph)}</b>/hr</span>
         <span>From your bank <b class="num green">${fmtGp(x.src === 'bank' ? x.gph : x.bankAlt.gpPerHour)}</b>/hr for ${fmtDuration((x.src === 'bank' ? x.bank : x.bankAlt).hours)}</span></div></div>` : '';
   const ex = r.extra || {};
-  const timeNote = m.x?.t === 'herb' ? `${fmtMs(ex.batch)} per brew of ${ex.bottles}` : m.x?.t === 'wc' ? `${fmtNum(ex.hits, 1)} swings` : m.x?.t === 'mine' ? `~${fmtNum(ex.hits, 1)} swings` : m.x?.t === 'art' && ex.steps > 1 ? `${fmtNum(ex.stepsTaken, 1)} of ${ex.steps} steps` : (m.note || '');
+  const timeNote = m.x?.t === 'hunt' ? `${fmtNum(ex.surveys, 1)} surveys, ${fmtNum(ex.steps, 1)} steps, ${fmtNum(ex.attempts, 1)} trap tries` : m.x?.t === 'herb' ? `${fmtMs(ex.batch)} per brew of ${ex.bottles}` : m.x?.t === 'wc' ? `${fmtNum(ex.hits, 1)} swings` : m.x?.t === 'mine' ? `~${fmtNum(ex.hits, 1)} swings` : m.x?.t === 'art' && ex.steps > 1 ? `${fmtNum(ex.stepsTaken, 1)} of ${ex.steps} steps` : (m.note || '');
 
   return `<div class="content">
     <table class="ledger">
@@ -620,7 +620,7 @@ function chainTree(chain) {
 // ---------------------------------------------------------------- training
 function viewTrain() {
   const e = E(), g = G(), s = state.save;
-  const skills = SKILL_ORDER.filter((k) => k !== 'Farming' && e.methods.some((m) => m.s === k));
+  const skills = SKILL_ORDER.filter((k) => !PASSIVE_SKILLS.has(k) && e.methods.some((m) => m.s === k));
   if (!skills.includes(state.trainSkill)) {
     // default: the skill closest to its next level by time
     state.trainSkill = skills.map((k) => ({ k, o: e.trainOptions(k)[0] })).filter((x) => x.o).sort((a, b) => {
@@ -1078,7 +1078,7 @@ $('#drawer').addEventListener('click', (e) => {
 window.addEventListener('hashchange', () => {
   const h = parseHash();
   if (h.explore && state.game) return startExplorer();
-  if (h.tab && state.save && h.tab !== state.tab) { if (h.tab === 'train' && h.arg) state.trainSkill = h.arg; go(h.tab); }
+  if (h.tab && state.save && (h.tab !== state.tab || (h.tab === 'train' && h.arg && h.arg !== state.trainSkill))) { if (h.tab === 'train' && h.arg) state.trainSkill = h.arg; go(h.tab); }
 });
 
 boot().catch((e) => { app.innerHTML = `<div class="empty"><b>Something went wrong loading the game data.</b>${esc(e.message)}</div>`; console.error(e); });
