@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241140';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241140';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241140';
+import { decodeSave } from './save.js?v=202611241141';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241141';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241141';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -672,7 +672,7 @@ function chainTree(chain) {
 // ---------------------------------------------------------------- training
 function viewTrain() {
   const e = E(), g = G(), s = state.save;
-  const skills = SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k));
+  const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k)), ...(state.explorer ? [] : COMBAT_SKILLS)];
   if (!skills.includes(state.trainSkill)) {
     // default: the skill closest to its next level by time
     state.trainSkill = skills.map((k) => ({ k, o: e.trainOptions(k)[0] })).filter((x) => x.o).sort((a, b) => {
@@ -722,7 +722,7 @@ function viewTrain() {
         <div class="panel stat"><div class="label">${img(g.currencies.GoldPieces, '', 16)}Gold along the way</div><div class="value num ${plan.gp < 0 ? 'red' : 'gold'}">${fmtGp(plan.gp, { sign: true })}</div><div class="sub">${plan.gp < 0 ? 'cost of supplies, net of what you make' : 'from selling what you make'}</div></div>
         <div class="panel stat"><div class="label">${svg.target}Methods</div><div class="value num">${plan.segs.length}</div><div class="sub">${plan.segs.length > 1 ? 'switch as new ones unlock' : 'one method all the way'}</div></div>
       </div>
-      ${plan.stuck ? `<div class="note">${svg.info}<span>Nothing you can train is unlocked at level ${plan.stuck}. Check the requirements in Money makers.</span></div>` : ''}
+      ${plan.stuck ? `<div class="note">${svg.info}<span>${COMBAT_SKILLS.includes(sk) ? `Your equipped weapon (${esc(G().items[E().fighter?.weapon]?.n || 'unarmed')}) has no stance that gives ${sk} XP${sk === 'Ranged' ? ', or needs a bow and matching ammo' : sk === 'Defence' ? '. Weapons with a Block stance, such as swords and daggers, train Defence' : ''}. Combat training uses the gear from your save.` : `Nothing you can train is unlocked at level ${plan.stuck}. Check the requirements in Money makers.`}</span></div>` : ''}
       <div class="panel plan">
         <h4>Route</h4>
         ${plan.segs.map((x) => `
@@ -751,7 +751,7 @@ function viewTrain() {
           const need = atLevel < 99 ? xpForLevel(atLevel + 1) - (atLevel === cur.level ? cur.xp : xpForLevel(atLevel)) : 0;
           return `<div class="trow ${i === 0 ? 'top' : ''}" data-item="${esc(o.m.primary || '')}">
             <span class="ico">${img(methodIcon(o.m), '', 28)}</span>
-            <span class="title"><b>${esc(o.m.n)} ${o.src === 'bank' ? `<span class="tag green">from bank · ${fmtDuration(o.bankHours)}</span>` : o.src === 'scratch' ? '<span class="tag">makes inputs</span>' : ''}</b><span class="sub">lvl ${o.m.lv}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.src === 'scratch' && o.scratch.steps.length ? `<span class="sep">·</span>${o.scratch.steps.slice(0, 3).map((st) => `${img(methodIcon(st.m), '', 14)}${Math.round(st.share * 60)}m`).join(' ')}` : o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
+            <span class="title"><b>${esc(o.m.n)} ${o.src === 'bank' ? `<span class="tag green">from bank · ${fmtDuration(o.bankHours)}</span>` : o.src === 'scratch' ? '<span class="tag">makes inputs</span>' : ''}</b><span class="sub">${o.stance ? `${esc(G().combat.stances[o.stance]?.n || o.stance)} stance<span class="sep">·</span>${fmtMs(o.killMs)} per kill<span class="sep">·</span>${esc(o.m.loc || '')}` : `lvl ${o.m.lv}`}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.src === 'scratch' && o.scratch.steps.length ? `<span class="sep">·</span>${o.scratch.steps.slice(0, 3).map((st) => `${img(methodIcon(st.m), '', 14)}${Math.round(st.share * 60)}m`).join(' ')}` : o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
             <span class="r num xpv" title="${esc(o.m.in.length ? `With inputs on hand: ${fmtGp(o.direct.xph)} xp/hr · making them yourself: ${o.scratch.feasible ? fmtGp(o.scratch.xph) : 'not possible yet'} xp/hr` : 'Gathering: no inputs needed')}">${fmtGp(o.xph)}</span>
             <span class="r num ${o.gph < 0 ? 'red' : 'green'}">${fmtGp(o.gph, { sign: true })}</span>
             <span class="r num muted">${atLevel < 99 ? fmtDuration(need / o.xph) : '—'}</span>

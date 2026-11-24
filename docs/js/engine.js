@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF } from './combat.js?v=202611241140';
+import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF } from './combat.js?v=202611241141';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -13,6 +13,8 @@ export const SKILL_ORDER = [
 ];
 /** "Skills" in SKILL_ORDER that have no level of their own to train. */
 export const NOT_TRAINABLE = new Set(['Combat', 'Farming', 'Ranching']);
+/** Combat skills trained by fighting (XP per damage dealt, by stance). */
+export const COMBAT_SKILLS = ['Attack', 'Strength', 'Defence', 'Hitpoints', 'Ranged'];
 /** Skills whose methods run passively (per plot / per animal), so they aren't trained or ranked as actions. */
 export const PASSIVE_SKILLS = new Set(['Farming', 'Ranching']);
 
@@ -1004,6 +1006,7 @@ export class Engine {
   trainOptions(skill, level = this.level(skill)) {
     const key = 'train|' + skill + '|' + level;
     if (this._cache.has(key)) return this._cache.get(key);
+    if (COMBAT_SKILLS.includes(skill)) { const rows = this.combatTrainOptions(skill, level); this._cache.set(key, rows); return rows; }
     const lv = { ...this.levels, [skill]: level };
     const rows = [];
     for (const m of this.methods) {
@@ -1022,6 +1025,38 @@ export class Engine {
     }
     rows.sort((a, b) => b.xph - a.xph);
     this._cache.set(key, rows);
+    return rows;
+  }
+
+  /** Enemies ranked by XP/hr for one combat skill, using the stance that trains it best. */
+  combatTrainOptions(skill, level) {
+    const C = this.g.combat;
+    if (!C) return [];
+    const p2 = { ...this.p, skills: { ...this.p.skills, [skill]: { xp: xpForLevel(level), level } } };
+    const fighter = playerFighter(this.g, p2);
+    const rows = [];
+    for (const m of this.unlockedMethods()) {
+      if (m.x?.t !== 'fight') continue;
+      const e = enemyFighter(C.enemies[m.rid]);
+      let best = null;
+      for (const stance of fighter.stances) {
+        const per = (C.stances[stance]?.xp || []).find(([s]) => s === skill)?.[1];
+        if (!per) continue;
+        const f = fight(C, fighter, e, stance);
+        if (!f || f.danger >= 0.9 || f.killMs > 20 * 60000) continue;
+        const kph = HOUR / f.killMs;
+        const xph = per * e.hp * kph * (1 + this.mod(m, 'PercentXPGained', null, 'Experience'));
+        if (!best || xph > best.xph) best = { f, xph, kph, stance };
+      }
+      if (!best) continue;
+      const loot = m.out.reduce((a, [it, q]) => a + q * this.value(it), 0) + m.gp;
+      const food = this.food ? (best.f.takenPerKill / this.items[this.food].heal) * this.value(this.food) : 0;
+      const gph = (loot - food) * best.kph;
+      const r = this.rate(m);
+      rows.push({ m, xph: best.xph, gph, r, direct: { xph: best.xph, gph }, scratch: { feasible: true, xph: best.xph, gph, steps: [], made: [], xpBy: [[skill, best.xph]], share: 1 },
+        bankHours: Infinity, src: 'gather', stance: best.stance, killMs: best.f.killMs });
+    }
+    rows.sort((a, b) => b.xph - a.xph);
     return rows;
   }
 
@@ -1044,7 +1079,8 @@ export class Engine {
     while (xp < goal && guard++ < 200) {
       const opts = this.trainOptions(skill, level);
       const nextUnlock = this.methods.filter((m) => m.s === skill && m.lv > level).reduce((a, m) => Math.min(a, m.lv), 100);
-      const stopLevel = Math.min(target, nextUnlock);
+      // combat rates improve with every level, so re-plan every few levels
+      const stopLevel = Math.min(target, COMBAT_SKILLS.includes(skill) ? level + 3 : nextUnlock);
       const stopXp = Math.min(goal, xpForLevel(stopLevel));
       const need = Math.max(0, stopXp - xp);
       // time to earn `need` xp with each option: bank stock first, then from scratch
@@ -1287,8 +1323,8 @@ export function fmtDuration(hours) {
   const mins = hours * 60;
   if (mins < 1) return '<1m';
   if (mins < 60) return Math.round(mins) + 'm';
-  if (hours < 48) { const h = Math.floor(hours); const m = Math.round((hours - h) * 60); return m ? `${h}h ${m}m` : `${h}h`; }
-  if (hours < 24 * 60) { const d = Math.floor(hours / 24); const h = Math.round(hours - d * 24); return h ? `${d}d ${h}h` : `${d}d`; }
+  if (hours < 48) { const t = Math.round(hours * 60); const h = Math.floor(t / 60); const m = t % 60; return m ? `${h}h ${m}m` : `${h}h`; }
+  if (hours < 24 * 60) { const t = Math.round(hours); const d = Math.floor(t / 24); const h = t % 24; return h ? `${d}d ${h}h` : `${d}d`; }
   return Math.round(hours / 24) + 'd';
 }
 export function fmtMs(ms) {

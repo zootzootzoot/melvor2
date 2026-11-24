@@ -61,9 +61,9 @@ function avgDamage(max, res, armour = 0) {
 }
 
 /** One player-vs-enemy matchup: best stance, kill time, damage taken, XP and danger. */
-export function fight(C, player, enemy) {
+export function fight(C, player, enemy, only = null) {
   let best = null;
-  for (const stance of player.stances) {
+  for (const stance of only ? [only] : player.stances) {
     const s = C.stances[stance];
     if (!s) continue;
     const mh = maxHit(C, player, s.style);
