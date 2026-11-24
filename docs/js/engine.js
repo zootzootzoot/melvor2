@@ -177,6 +177,78 @@ export class Engine {
     }
   }
 
+  /** Units per hour of the fastest unlocked way to progress a guild goal, or null if we can't tell. */
+  taskRate(sk, q) {
+    const ms = this.unlockedMethods().filter((m) => m.s === sk && m.k === 'active');
+    const match = (m) => (!q.r || m.rid === q.r) && (!q.sub || m.sub === q.sub) && (!q.cat || m.cat === q.cat);
+    let best = null;
+    const consider = (m, perHour) => { if (perHour > 0 && (!best || perHour > best.perHour)) best = { m, perHour }; };
+    for (const m of ms) {
+      const r = this.rate(m);
+      switch (q.t) {
+        case 'WoodcuttingCutTree': case 'MiningMineRock': case 'FishingFishRecipe': case 'FiremakingBurnRecipe':
+        case 'ArtisanCreateRecipe':
+          if (match(m)) consider(m, r.aph); break;
+        case 'CookRecipe': if (match(m)) consider(m, r.aph * r.succ); break;
+        case 'ArtisanCompleteStep': if (match(m)) consider(m, r.aph * (r.extra?.steps || 1)); break;
+        case 'ThievingPickpocketTargetType':
+          if ((!q.tt || m.rt === q.tt) && (!q.loc || m.cat === q.loc)) consider(m, r.aph * r.succ); break;
+        case 'ActionGainItem': { const o = r.outs.find(([it]) => it === q.it); if (o) consider(m, o[1]); break; }
+        case 'ActionGainItemValue': consider(m, r.outValue - r.gp); break;
+        default: break;
+      }
+    }
+    return best;
+  }
+
+  /** Every task of a skill's mastery guild with status, progress and a time estimate. */
+  guildTasks(sk) {
+    const gd = this.g.guild?.[sk];
+    const gs = this.guild?.[sk];
+    if (!gd || !gs) return [];
+    const sv = this.p.guild?.[sk] || {};
+    const done = new Set(sv.done || []), trig = new Set(sv.trig || []);
+    const out = [];
+    for (const [id, t] of Object.entries(gd.tasks)) {
+      const [pts, kind] = t;
+      let status = null, text = '', prog = 0, max = 1, est = null;
+      if (kind === 'g') {
+        const q = t[3];
+        text = t[2]; max = q.n; prog = Math.min(max, this.p.guild?.[sk]?.progress?.[id] ?? 0);
+        status = done.has(id);
+        if (!status) { const b = this.taskRate(sk, q); if (b) est = { hours: (max - prog) / b.perHour, m: b.m }; }
+      } else if (kind === 't') { text = 'Trigger: ' + t[2]; status = trig.has(id); }
+      else if (kind === 'l') {
+        text = t[4]; max = t[3]; prog = Math.min(max, this.levels[t[2]] ?? 1); status = prog >= max;
+        if (!status && SKILL_ORDER.includes(t[2]) && t[2] !== 'Farming') {
+          const pl = this.planLevel(t[2], t[3]);
+          if (Number.isFinite(pl.hours)) est = { hours: pl.hours, m: pl.segs[0]?.m };
+        }
+      } else if (kind === 'i') {
+        const skill = t[2].replace(/ItemGained$/, '');
+        text = `Get ${t[4].toLocaleString('en-US')} ${this.name(t[3])} from ${skill}`;
+        max = t[4]; prog = Math.min(max, this.p.stats?.items?.[t[2]]?.[t[3]] ?? 0); status = prog >= max;
+        if (!status && /ItemGained$/.test(t[2])) { const b = this.taskRate(skill, { t: 'ActionGainItem', it: t[3] }); if (b) est = { hours: (max - prog) / b.perHour, m: b.m }; }
+      } else if (kind === 'v') { text = t[4]; max = t[3]; prog = Math.min(max, this.p.stats?.simple?.[t[2]] ?? 0); status = prog >= max; }
+      else { text = t[3] || t[2]; status = this.p.allGuild ? true : null; }
+      out.push({ id, pts, kind, text, done: status, prog, max, est });
+    }
+    return out;
+  }
+
+  /** Greedy: open tasks by guild points per hour until the next rank is reached. */
+  guildPlan(sk) {
+    const gs = this.guild?.[sk];
+    if (!gs?.next) return null;
+    const need = gs.need(gs.next) - gs.lo;
+    const open = this.guildTasks(sk).filter((t) => t.done === false && t.est && Number.isFinite(t.est.hours))
+      .map((t) => ({ ...t, pph: t.pts / Math.max(t.est.hours, 1 / 60) })).sort((a, b) => b.pph - a.pph);
+    const pick = [];
+    let pts = 0, hours = 0;
+    for (const t of open) { if (pts >= need) break; pick.push(t); pts += t.pts; hours += t.est.hours; }
+    return { need, pick, hours: pts >= need ? hours : Infinity, reachable: pts >= need, open };
+  }
+
   guildName(skill, rank) {
     return this.g.guild?.[skill]?.rankNames?.[rank] || String(rank).replace(/([a-z])([A-Z])/g, '$1 $2');
   }

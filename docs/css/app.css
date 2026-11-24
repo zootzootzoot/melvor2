@@ -718,3 +718,28 @@ dialog::backdrop { background: rgba(5, 6, 10, .6); backdrop-filter: blur(3px); }
   .mode b { white-space: nowrap; }
 }
 @media (max-width: 640px) { .filter-row .search { flex: 1 1 100%; } }
+.guild-plan { padding: 16px 18px; display: grid; gap: 10px; }
+.guild-plan h4 { margin: 0 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: var(--text-3); font-weight: 700; }
+.gp-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.gp-title { font-size: 15px; color: var(--text-2); }
+.gp-title b { color: #c8a8ff; }
+.gp-sum { text-align: right; }
+.gp-sum .num { font-family: var(--display); font-size: 26px; font-weight: 650; color: #c8a8ff; line-height: 1; }
+.gp-sum small { display: block; font-size: 12px; color: var(--text-3); }
+.gt-list { display: grid; gap: 4px; }
+.gt { display: grid; grid-template-columns: 30px minmax(0, 1fr) 140px; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 10px; background: rgba(0, 0, 0, .2); border: 1px solid var(--line); }
+.gt.is-done { opacity: .55; }
+.gpts { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #c8a8ff; background: rgba(200, 168, 255, .1); border: 1px solid rgba(200, 168, 255, .25); }
+.gt-main b { display: block; font-size: 13.5px; font-weight: 600; }
+.gt-main small { font-size: 11px; color: var(--text-3); }
+.gt-bar { height: 4px; border-radius: 999px; background: rgba(255, 255, 255, .06); overflow: hidden; margin: 4px 0 2px; max-width: 320px; }
+.gt-bar i { display: block; height: 100%; background: linear-gradient(90deg, #8fb8ff, #c8a8ff); }
+.gt-est { text-align: right; }
+.gt-est .num { font-weight: 700; display: block; }
+.gt-est small { display: block; font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gt-all summary { cursor: pointer; font-size: 13px; font-weight: 600; padding: 4px 0; list-style: none; }
+.gt-all summary::-webkit-details-marker { display: none; }
+.gt-all summary::before { content: "\25B8  "; color: var(--text-3); }
+.gt-all[open] summary::before { content: "\25BE  "; }
+.gt-all .gt-list { margin-top: 8px; max-height: 520px; overflow-y: auto; }
+@media (max-width: 640px) { .gt { grid-template-columns: 28px minmax(0, 1fr) 84px; } }

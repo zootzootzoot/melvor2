@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241101';
-import { Engine, SKILL_ORDER, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241101';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241101';
+import { decodeSave } from './save.js?v=202611241116';
+import { Engine, SKILL_ORDER, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241116';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241116';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -685,6 +685,7 @@ function viewTrain() {
           return `<div class="sup" data-item="${esc(x.item)}">${img(itemIcon(x.item), '', 26)}<div><b>${esc(e.name(x.item))}</b><span class="num">${fmtNum(x.qty)} needed · you have ${fmtNum(x.have)}</span></div>${miss > 0 ? `<span class="pill red num">−${fmtGp(miss)}</span>` : `<span class="pill green">${svg.check}</span>`}</div>`;
         }).join('')}</div>` : ''}
       </div>` : ''}
+      ${state.explorer ? '' : guildSection(sk)}
       <div class="section-sub">
         <h4>Every way to train ${sk}</h4>
         <label class="lvl-in inline">at level <input type="number" min="1" max="99" value="${atLevel}" id="atlevel"/></label>
@@ -703,6 +704,37 @@ function viewTrain() {
         }).join('') || '<div class="empty"><b>Nothing to train at this level.</b></div>'}
       </div>
     </div>
+  </div>`;
+}
+
+function guildSection(sk) {
+  const e = E();
+  const gs = e.guild?.[sk];
+  if (!gs) return '';
+  const plan = e.guildPlan(sk);
+  const tasks = e.guildTasks(sk);
+  const doneN = tasks.filter((t) => t.done).length;
+  const taskRow = (t) => {
+    const pct = t.max > 0 ? Math.min(100, (t.prog / t.max) * 100) : 0;
+    const est = t.done ? `<span class="pill green">${svg.check}done</span>`
+      : t.est ? `<span class="num">${fmtDuration(t.est.hours)}</span>${t.est.m ? `<small>${esc(t.est.m.n)}</small>` : ''}`
+      : t.done === null ? '<small class="muted">not readable</small>' : '<small class="muted">no estimate</small>';
+    return `<div class="gt ${t.done ? 'is-done' : ''}">
+      <span class="gpts num" title="Guild points">${t.pts}</span>
+      <div class="gt-main"><b>${esc(t.text)}</b>${t.max > 1 && !t.done ? `<div class="gt-bar"><i style="width:${pct}%"></i></div><small class="num">${fmtNum(t.prog)} / ${fmtNum(t.max)}</small>` : ''}</div>
+      <div class="gt-est">${est}</div>
+    </div>`;
+  };
+  const open = tasks.filter((t) => !t.done).sort((a, b) => (a.est ? a.est.hours / a.pts : Infinity) - (b.est ? b.est.hours / b.pts : Infinity));
+  return `<div class="panel guild-plan">
+    <div class="gp-head">
+      <div><h4>Mastery guild</h4><div class="gp-title">${plan ? `Fastest route to <b>${esc(e.guildName(sk, gs.next))}</b>` : `<b>${esc(e.guildName(sk, gs.rank))}</b> · top rank`}</div></div>
+      ${plan ? `<div class="gp-sum"><span class="num">${plan.reachable ? fmtDuration(plan.hours) : '—'}</span><small>${fmtNum(plan.need)} points · ${plan.pick.length} task${plan.pick.length === 1 ? '' : 's'}</small></div>` : ''}
+    </div>
+    ${plan && plan.pick.length ? `<div class="gt-list">${plan.pick.map(taskRow).join('')}</div>` : plan ? `<p class="muted">Not enough tasks can be estimated to reach the next rank with what you have unlocked.</p>` : ''}
+    <details class="gt-all"><summary>All tasks <span class="muted">${doneN} of ${tasks.length} done · ${fmtNum(gs.lo)} of ${fmtNum(gs.total)} points</span></summary>
+      <div class="gt-list">${open.map(taskRow).join('')}${tasks.filter((t) => t.done).map(taskRow).join('')}</div>
+    </details>
   </div>`;
 }
 

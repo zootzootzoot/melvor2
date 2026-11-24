@@ -453,6 +453,62 @@ def main():
 
     # ---- mastery guilds: rank thresholds, task points + how to check each task, rank bonuses
     task_by_id = {t["Id"]: t for t in O["MasteryGuildTask"]}
+    rec_name = {(m["s"], m["rid"]): m["n"] for m in methods}
+    sub_names = {c["Id"]: c["DisplayName"] for c in O.get("RecipeSubcategory", [])}
+    goal_cat_names = {c["Id"]: c["DisplayName"] for c in O.get("RecipeGoalCategory", [])}
+    loc_names = {**{k: v.get("DisplayName") for k, v in fish_loc.items()}, **{k: v.get("DisplayName") for k, v in thv_loc.items()}}
+
+    def human(x):
+        return re.sub(r"([a-z])([A-Z0-9])", r"\1 \2", short(x) or "")
+
+    def task_goal(t, sk):
+        g = t["Goal"]
+        ty, dd = short(g["Type"]), g["Data"] or {}
+        n = dd.get("MaxProgress", 1)
+        q = {"t": ty, "n": n}
+        for k, key in (("Recipe", "r"), ("Category", "cat"), ("Subcategory", "sub"), ("Item", "it"), ("Location", "loc"),
+                       ("TargetType", "tt"), ("GoalCategory", "gc")):
+            if dd.get(k):
+                q[key] = short(dd[k])
+        ent = short((dd.get("Component") or {}).get("Entity")) or sk
+        parts = [cat_names.get(q["cat"]) if q.get("cat") else None, sub_names.get(q["sub"]) if q.get("sub") else None]
+        what = (rec_name.get((ent, q.get("r"))) if q.get("r") else None) or ": ".join(x for x in parts if x)             or (goal_cat_names.get(q.get("gc")) if q.get("gc") else None)
+        item = items.get(q.get("it"), {}).get("n") if q.get("it") else None
+        num = f"{n:,}"
+        text = {
+            "WoodcuttingCutTree": f"Cut {num} {what or 'logs'}",
+            "MiningMineRock": f"Mine {num} {what or 'ore'}",
+            "FishingFishRecipe": f"Catch {num} fish at {what or 'any spot'}",
+            "CookRecipe": f"Cook {num} {what or 'dishes'}",
+            "FiremakingBurnRecipe": f"Burn {num} {what or 'logs'}",
+            "ArtisanCreateRecipe": f"Make {num} {what or 'items'}",
+            "ArtisanCreateRecipeGoalCategory": f"Make {num} {what or 'items'}",
+            "ArtisanCompleteStep": f"Complete {num} steps of {what or 'any recipe'}",
+            "ActionGainItem": f"Get {num} {item or 'items'}",
+            "ActionGainItemValue": f"Gain {num} gold worth of items",
+            "ThievingPickpocketTargetType": f"Pickpocket {num} {human(q.get('tt')) or 'targets'}{' in ' + (loc_names.get(q.get('loc')) or human(q.get('loc'))) if q.get('loc') else ''}",
+            "HerbloreBrewPotionGroup": f"Brew {human(dd.get('PotionGroup'))} ({human(dd.get('Potency'))}) to {num}",
+            "HerbloreBrewPotionCategory": f"Brew {human(q.get('cat'))} ({human(dd.get('Potency'))}) to {num}",
+            "FarmingHarvestRecipe": f"Harvest {what or human(q.get('r')) or 'crops'} x{num}",
+            "ArtisanSkipStep": f"Skip {num} steps",
+            "ArtisanPreserveItem": f"Preserve {num} {item or 'ingredients'}",
+            "PreserveCookingItem": f"Preserve {num} ingredients",
+            "PreserveHerbloreItem": f"Preserve {num} {item or 'herbs'}",
+            "WoodcuttingDamageTree": f"Deal {num} damage to trees",
+            "WoodcuttingInstantCut": f"Instantly fell {num} trees",
+            "MiningEarlyBreak": f"Break {num} rocks early",
+        }.get(ty) or f"{human(ty)} x{num}"
+        return q, text
+
+    def human_cond(cg):
+        ty, dd = short(cg.get("Type")), cg.get("Data") or {}
+        if ty == "Level":
+            return f"Reach {short(dd['Component']['Entity'])} level {dd['Level']}"
+        if ty == "ItemStatistic":
+            return f"{human(dd.get('Statistic'))}: {items.get(short(dd.get('Item')), {}).get('n', human(dd.get('Item')))} x{dd.get('Value', 1):,}"
+        if ty == "PetUnlocked":
+            return f"Find the pet {human(dd.get('Pet'))}"
+        return human(ty)
     cat_points = {c["Id"]: c["BasePoints"] for c in O["MasteryGuildCategory"]}
     rank_pct = {r["Id"]: r["PointPercentRequired"] for r in O["MasteryGuildRank"]}
     guild = {}
@@ -467,9 +523,11 @@ def main():
                 continue
             pts = cat_points.get(short(t["Category"]), 1)
             if t.get("Goal"):
-                tasks[t["Id"]] = [pts, "g"]
+                q, text = task_goal(t, sk)
+                tasks[t["Id"]] = [pts, "g", text, q]
+                continue
             elif t.get("TriggerGoal"):
-                tasks[t["Id"]] = [pts, "t"]
+                tasks[t["Id"]] = [pts, "t", human(t["TriggerGoal"]["Type"])]
             else:
                 cg = t.get("ConditionGoal") or {}
                 ty, dd = short(cg.get("Type")), cg.get("Data") or {}
@@ -491,6 +549,9 @@ def main():
             rr = [short(q["Data"].get("Rank")) for q in b.get("Requirements") or [] if short(q["Type"]) == "MasteryGuildRank"]
             if bb and rr:
                 bonuses.append({"id": b["Id"], "n": b["DisplayName"], "rank": rr[0], "b": bb})
+        for tid, row in tasks.items():
+            if row[1] in ("l", "i", "v", "u"):
+                row.append(human_cond(task_by_id[tid].get("ConditionGoal") or {}))
         guild[sk] = {"ranks": ranks, "tasks": tasks, "bonuses": bonuses,
                      "rankNames": {short(r["Id"]): next((x["DisplayName"] for x in O["MasteryGuildRank"] if x["Id"] == short(r["Id"])), r["Id"]) for r in cfg.get("MasteryGuildRanks") or []}}
 
