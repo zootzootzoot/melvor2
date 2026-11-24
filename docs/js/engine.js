@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill } from './combat.js?v=202611241136';
+import { playerFighter, enemyFighter, fight, dropsPerKill } from './combat.js?v=202611241138';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -218,7 +218,7 @@ export class Engine {
   }
 
   /** Units per hour of the fastest unlocked way to progress a guild goal, or null if we can't tell. */
-  taskRate(sk, q) {
+  taskRate(sk, q, left = 0) {
     const ms = this.unlockedMethods().filter((m) => m.s === sk && m.k === 'active');
     const match = (m) => (!q.r || m.rid === q.r) && (!q.sub || m.sub === q.sub) && (!q.cat || m.cat === q.cat);
     let best = null;
@@ -240,6 +240,17 @@ export class Engine {
         default: break;
       }
     }
+    // Per hour of play: inputs come from the bank while it lasts, then have to be made (chain time).
+    if (best && best.m.in.length && left > 0) {
+      const r = this.rate(best.m);
+      const bankH = Math.min(...r.ins.map(([it, qq]) => (this.bank[it] || 0) / qq));
+      if (bankH * best.perHour < left) {
+        const tr = this.trainRate(best.m, this.levels);
+        if (!tr.feasible) return null;
+        const hours = bankH + (left - bankH * best.perHour) / (best.perHour * tr.share);
+        best = { m: best.m, perHour: left / hours };
+      }
+    }
     return best;
   }
 
@@ -258,7 +269,7 @@ export class Engine {
         const q = t[3];
         text = t[2]; max = q.n; prog = Math.min(max, this.p.guild?.[sk]?.progress?.[id] ?? 0);
         status = done.has(id);
-        if (!status) { const b = this.taskRate(sk, q); if (b) est = { hours: (max - prog) / b.perHour, m: b.m }; }
+        if (!status) { const b = this.taskRate(sk, q, max - prog); if (b) est = { hours: (max - prog) / b.perHour, m: b.m }; }
       } else if (kind === 't') { text = 'Trigger: ' + t[2]; status = trig.has(id); }
       else if (kind === 'l') {
         text = t[4]; max = t[3]; prog = Math.min(max, this.levels[t[2]] ?? 1); status = prog >= max;
@@ -270,7 +281,7 @@ export class Engine {
         const skill = t[2].replace(/ItemGained$/, '');
         text = `Get ${t[4].toLocaleString('en-US')} ${this.name(t[3])} from ${skill}`;
         max = t[4]; prog = Math.min(max, this.p.stats?.items?.[t[2]]?.[t[3]] ?? 0); status = prog >= max;
-        if (!status && /ItemGained$/.test(t[2])) { const b = this.taskRate(skill, { t: 'ActionGainItem', it: t[3] }); if (b) est = { hours: (max - prog) / b.perHour, m: b.m }; }
+        if (!status && /ItemGained$/.test(t[2])) { const b = this.taskRate(skill, { t: 'ActionGainItem', it: t[3] }, max - prog); if (b) est = { hours: (max - prog) / b.perHour, m: b.m }; }
       } else if (kind === 'p') {
         const pet = this.g.pets?.[t[2]];
         text = `Find ${pet?.n || t[2]}`; status = !!this.p.pets?.[t[2]];
@@ -939,26 +950,80 @@ export class Engine {
   }
 
   // ---------------------------------------------------------------- training
-  /** Methods for one skill at a given level, ranked by XP/hr. */
+  /**
+   * Training rate when you also have to make the inputs yourself: walks the cheapest production
+   * chain, adds the time of every upstream step, and credits XP earned along the way (making
+   * Water Runes for Fire Wands is Runecrafting XP too). Per hour of play.
+   */
+  trainRate(m, lv) {
+    const r = this.rate(m, lv);
+    const { costs } = this.solveChains();
+    const xpBy = new Map([[m.s, r.xp]]);
+    const steps = new Map();
+    const made = new Map();
+    let upMs = 0, gpSpent = 0, feasible = true;
+    const walk = (item, qty, depth) => {
+      if (depth > 8 || qty <= 0) return;
+      const c = costs.get(item);
+      if (!c) { feasible = false; return; }
+      if (c.via.kind === 'buy') { gpSpent += c.gp * qty; return; }
+      const mm = c.via.m;
+      const rr = this.rate(mm, lv);
+      const prim = (rr.outs.find(([it]) => it === mm.primary)?.[1] ?? 0) / rr.aph;
+      if (!(prim > 0)) { feasible = false; return; }
+      const actions = qty / prim;
+      const ms = actions * rr.ms;
+      upMs += ms;
+      steps.set(mm, (steps.get(mm) || 0) + ms);
+      made.set(item, (made.get(item) || 0) + qty);
+      xpBy.set(mm.s, (xpBy.get(mm.s) || 0) + (rr.xp / rr.aph) * actions);
+      for (const [it, q] of rr.ins) walk(it, actions * (q / rr.aph), depth + 1);
+    };
+    for (const [it, q] of r.ins) walk(it, q, 0);
+    const share = HOUR / (HOUR + upMs);
+    return {
+      feasible, share, upMs,
+      xph: (xpBy.get(m.s) || 0) * share,
+      xpBy: [...xpBy.entries()].map(([s, v]) => [s, v * share]),
+      gph: (r.outValue - gpSpent) * share,
+      steps: [...steps.entries()].map(([mm, ms]) => ({ m: mm, share: (ms * share) / HOUR })).sort((a, b) => b.share - a.share),
+      made: [...made.entries()].map(([it, q]) => [it, q * share]),
+    };
+  }
+
+  /**
+   * Methods for one skill at a given level. `direct` is the rate when the inputs are already in
+   * your bank; `scratch` also makes them. `xph` is what you'd actually get: direct while your
+   * bank can fuel at least an hour of it, otherwise from scratch.
+   */
   trainOptions(skill, level = this.level(skill)) {
+    const key = 'train|' + skill + '|' + level;
+    if (this._cache.has(key)) return this._cache.get(key);
     const lv = { ...this.levels, [skill]: level };
     const rows = [];
     for (const m of this.methods) {
       if (m.s !== skill || m.k === 'passive') continue;
       const st = this.status(m, lv);
       if (!st.unlocked) continue;
-      if (m.rareInputs.length && !m.rareInputs.every((it) => this.bank[it])) continue;
       const s = this.sellRate(m, lv);
       if (!(s.r.xp > 0)) continue;
-      rows.push({ m, xph: s.r.xp, gph: Number.isFinite(s.gpPerHour) ? s.gpPerHour : -Infinity, r: s.r });
+      const bankHours = s.r.ins.length ? Math.min(...s.r.ins.map(([it, q]) => (this.bank[it] || 0) / q)) : Infinity;
+      const scratch = s.r.ins.length ? this.trainRate(m, lv) : { feasible: true, xph: s.r.xp, gph: s.gpPerHour, steps: [], made: [], xpBy: [[skill, s.r.xp]], share: 1 };
+      if (!scratch.feasible && !(bankHours > 0)) continue;
+      const fromBank = s.r.ins.length > 0 && bankHours >= 1;
+      const xph = fromBank || !scratch.feasible ? s.r.xp : scratch.xph;
+      const gph = fromBank || !scratch.feasible ? (Number.isFinite(s.gpPerHour) ? s.gpPerHour : -Infinity) : scratch.gph;
+      rows.push({ m, xph, gph, r: s.r, direct: { xph: s.r.xp, gph: s.gpPerHour }, scratch, bankHours, src: !s.r.ins.length ? 'gather' : fromBank ? 'bank' : 'scratch' });
     }
     rows.sort((a, b) => b.xph - a.xph);
+    this._cache.set(key, rows);
     return rows;
   }
 
   /**
-   * Fastest path from the current XP to a target level: at every level band use the best
-   * XP/hr method available. Returns segments and the supplies they consume.
+   * Fastest path from the current XP to a target level. In each level band it picks the method
+   * that gets there soonest, using inputs from your bank first (no gathering time) and making the
+   * rest from scratch, with XP from the intermediate steps counted.
    */
   planLevel(skill, target, { prefer = 'xp' } = {}) {
     const cur = this.p.skills?.[skill];
@@ -967,31 +1032,61 @@ export class Engine {
     const goal = xpForLevel(target);
     const segs = [];
     let hours = 0, gp = 0;
-    const supplies = new Map();
+    const stock = { ...this.bank };
+    const used = new Map();
+    const madeAll = new Map();
     let guard = 0;
     while (xp < goal && guard++ < 200) {
       const opts = this.trainOptions(skill, level);
-      const pick = prefer === 'gp'
-        ? opts.filter((o) => o.gph >= 0).sort((a, b) => b.gph - a.gph)[0] || opts[0]
-        : opts[0];
-      if (!pick) return { segs, hours: Infinity, gp, supplies: [], stuck: level };
-      // run this method until the next level where a better option could appear
       const nextUnlock = this.methods.filter((m) => m.s === skill && m.lv > level).reduce((a, m) => Math.min(a, m.lv), 100);
       const stopLevel = Math.min(target, nextUnlock);
       const stopXp = Math.min(goal, xpForLevel(stopLevel));
       const need = Math.max(0, stopXp - xp);
-      const h = need / pick.xph;
+      // time to earn `need` xp with each option: bank stock first, then from scratch
+      const plan = (o) => {
+        const d = o.direct.xph;
+        const ins = o.r.ins;
+        const stockH = ins.length ? Math.min(...ins.map(([it, q]) => (stock[it] || 0) / q)) : Infinity;
+        const hb = Math.min(stockH, need / d);
+        const rem = need - hb * d;
+        const hs = rem > 1e-6 ? (o.scratch.feasible && o.scratch.xph > 0 ? rem / o.scratch.xph : Infinity) : 0;
+        const g = hb * (Number.isFinite(o.direct.gph) ? o.direct.gph : 0) + hs * (o.scratch.gph || 0);
+        return { o, hb, hs, t: hb + hs, g };
+      };
+      const cands = opts.map(plan).filter((p) => Number.isFinite(p.t));
+      const pick = prefer === 'gp'
+        ? cands.filter((p) => p.g >= 0).sort((a, b) => b.g / b.t - a.g / a.t)[0] || cands.sort((a, b) => a.t - b.t)[0]
+        : cands.sort((a, b) => a.t - b.t)[0];
+      if (!pick) return { segs, hours: Infinity, gp, supplies: [], made: [], stuck: level };
+      const o = pick.o;
+      for (const [it, q] of o.r.ins) {
+        const n = q * pick.hb;
+        stock[it] = Math.max(0, (stock[it] || 0) - n);
+        used.set(it, (used.get(it) || 0) + n);
+      }
+      if (pick.hs > 0) {
+        // inputs consumed from scratch: what the chain makes (bought/shop inputs are counted via gold)
+        const directShare = o.scratch.share;
+        for (const [it, q] of o.r.ins) used.set(it, (used.get(it) || 0) + q * directShare * pick.hs);
+        for (const [it, q] of o.scratch.made) madeAll.set(it, (madeAll.get(it) || 0) + q * pick.hs);
+      }
       const last = segs[segs.length - 1];
-      if (last && last.m === pick.m) { last.hours += h; last.toLevel = stopLevel; last.xp += need; }
-      else segs.push({ m: pick.m, fromLevel: level, toLevel: stopLevel, hours: h, xp: need, xph: pick.xph, gph: pick.gph });
-      hours += h;
-      gp += pick.gph * h;
-      for (const [it, q] of pick.r.ins) supplies.set(it, (supplies.get(it) || 0) + q * h);
+      const seg = { m: o.m, fromLevel: level, toLevel: stopLevel, hours: pick.t, xp: need, xph: need / pick.t, gph: pick.g / pick.t, bankHours: pick.hb, scratchHours: pick.hs, steps: o.scratch.steps, otherXp: o.scratch.xpBy.filter(([s]) => s !== skill) };
+      if (last && last.m === o.m) {
+        last.hours += pick.t; last.toLevel = stopLevel; last.xp += need; last.bankHours += pick.hb; last.scratchHours += pick.hs;
+        last.xph = last.xp / last.hours; last.gph = (last.gph * (last.hours - pick.t) + pick.g) / last.hours;
+      } else segs.push(seg);
+      hours += pick.t;
+      gp += pick.g;
       xp = stopXp;
       level = Math.max(level, levelFromXp(xp));
       if (need === 0 && level < stopLevel) level = stopLevel;
     }
-    return { segs, hours, gp, supplies: [...supplies.entries()].map(([item, qty]) => ({ item, qty, have: this.bank[item] || 0 })) };
+    return {
+      segs, hours, gp,
+      supplies: [...used.entries()].map(([item, qty]) => ({ item, qty, have: this.bank[item] || 0, made: madeAll.get(item) || 0 })),
+      made: [...madeAll.entries()].map(([item, qty]) => ({ item, qty })),
+    };
   }
 
   // ---------------------------------------------------------------- shop advisor

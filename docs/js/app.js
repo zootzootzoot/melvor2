@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241136';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241136';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241136';
+import { decodeSave } from './save.js?v=202611241138';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241138';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241138';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -725,14 +725,15 @@ function viewTrain() {
         ${plan.segs.map((x) => `
           <div class="seg-row">
             <span class="ico">${img(methodIcon(x.m), '', 30)}</span>
-            <div class="title"><b>${esc(x.m.n)}</b><span class="sub">lvl ${x.fromLevel} → ${x.toLevel}<span class="sep">·</span>${fmtGp(x.xph)} xp/hr<span class="sep">·</span><span class="${x.gph < 0 ? 'red' : 'green'}">${fmtGp(x.gph, { sign: true })} gp/hr</span></span></div>
+            <div class="title"><b>${esc(x.m.n)}</b><span class="sub">lvl ${x.fromLevel} → ${x.toLevel}<span class="sep">·</span>${fmtGp(x.xph)} xp/hr<span class="sep">·</span><span class="${x.gph < 0 ? 'red' : 'green'}">${fmtGp(x.gph, { sign: true })} gp/hr</span></span>${routeNote(x)}</div>
             <div class="seg-bar"><i style="width:${Math.max(3, (x.hours / maxH) * 100)}%"></i></div>
             <span class="seg-h num">${fmtDuration(x.hours)}</span>
           </div>`).join('')}
         ${short.length ? `<h4 style="margin-top:18px">Supplies</h4>
         <div class="supplies">${short.slice(0, 12).map((x) => {
           const miss = Math.max(0, x.qty - x.have);
-          return `<div class="sup" data-item="${esc(x.item)}">${img(itemIcon(x.item), '', 26)}<div><b>${esc(e.name(x.item))}</b><span class="num">${fmtNum(x.qty)} needed · you have ${fmtNum(x.have)}</span></div>${miss > 0 ? `<span class="pill red num">−${fmtGp(miss)}</span>` : `<span class="pill green">${svg.check}</span>`}</div>`;
+          const made = x.made >= 1;
+          return `<div class="sup" data-item="${esc(x.item)}">${img(itemIcon(x.item), '', 26)}<div><b>${esc(e.name(x.item))}</b><span class="num">${fmtNum(x.qty)} needed · you have ${fmtNum(x.have)}${made ? ` · route makes ${fmtNum(x.made)}` : ''}</span></div>${made ? `<span class="pill">${svg.check}made</span>` : miss > 0 ? `<span class="pill red num">−${fmtGp(miss)}</span>` : `<span class="pill green">${svg.check}</span>`}</div>`;
         }).join('')}</div>` : ''}
       </div>` : ''}
       ${state.explorer ? '' : guildSection(sk)}
@@ -741,13 +742,14 @@ function viewTrain() {
         <label class="lvl-in inline">at level <input type="number" min="1" max="99" value="${atLevel}" id="atlevel"/></label>
       </div>
       <div class="tlist">
+        <p class="bu-p" style="margin:0 0 6px">XP/hr is per hour of play. If your bank holds the inputs for at least an hour, it uses those. Otherwise it includes the time to gather or make them, plus the XP you earn doing so in this skill.</p>
         <div class="thead"><span></span><span>Method</span><span class="r">XP / hr</span><span class="r">Gold / hr</span><span class="r">Next level</span></div>
         ${opts.slice(0, 40).map((o, i) => {
           const need = atLevel < 99 ? xpForLevel(atLevel + 1) - (atLevel === cur.level ? cur.xp : xpForLevel(atLevel)) : 0;
           return `<div class="trow ${i === 0 ? 'top' : ''}" data-item="${esc(o.m.primary || '')}">
             <span class="ico">${img(methodIcon(o.m), '', 28)}</span>
-            <span class="title"><b>${esc(o.m.n)}</b><span class="sub">lvl ${o.m.lv}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
-            <span class="r num xpv">${fmtGp(o.xph)}</span>
+            <span class="title"><b>${esc(o.m.n)} ${o.src === 'bank' ? `<span class="tag green">from bank · ${fmtDuration(o.bankHours)}</span>` : o.src === 'scratch' ? '<span class="tag">makes inputs</span>' : ''}</b><span class="sub">lvl ${o.m.lv}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.src === 'scratch' && o.scratch.steps.length ? `<span class="sep">·</span>${o.scratch.steps.slice(0, 3).map((st) => `${img(methodIcon(st.m), '', 14)}${Math.round(st.share * 60)}m`).join(' ')}` : o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
+            <span class="r num xpv" title="${esc(o.m.in.length ? `With inputs on hand: ${fmtGp(o.direct.xph)} xp/hr · making them yourself: ${o.scratch.feasible ? fmtGp(o.scratch.xph) : 'not possible yet'} xp/hr` : 'Gathering: no inputs needed')}">${fmtGp(o.xph)}</span>
             <span class="r num ${o.gph < 0 ? 'red' : 'green'}">${fmtGp(o.gph, { sign: true })}</span>
             <span class="r num muted">${atLevel < 99 ? fmtDuration(need / o.xph) : '—'}</span>
           </div>`;
@@ -764,6 +766,16 @@ function petLine(sk) {
     const fx = (p.b || []).map((b) => { const t = bonusText(b, lookup); return `${t.val} ${t.label}${t.where ? ` (${t.where})` : ''}`; }).join(', ');
     return `<span class="pet ${p.have ? 'have' : ''}" title="${esc(fx || 'No bonus')}${p.hours && !p.have ? esc(` · expected after about ${fmtDuration(p.hours)} of ${p.via?.n || 'training'}`) : ''}">${img(p.i, '', 22)}<b>${esc(p.n)}</b>${p.have ? `<em class="green">${svg.check} found</em>` : p.hours ? `<em>~${fmtDuration(p.hours)}</em>` : ''}</span>`;
   }).join('')}</div>`;
+}
+
+/** Under a route step: how much comes from the bank, what the rest has you make, and XP in other skills. */
+function routeNote(x) {
+  const parts = [];
+  if (x.bankHours > 0.01 && x.scratchHours > 0.01) parts.push(`${fmtDuration(x.bankHours)} from your bank, then ${fmtDuration(x.scratchHours)} making inputs`);
+  else if (x.bankHours > 0.01 && x.m.in.length) parts.push('uses inputs from your bank');
+  if (x.scratchHours > 0.01 && x.steps?.length) parts.push(`each hour: ${x.steps.slice(0, 4).map((st) => `${esc(st.m.n)} ${Math.round(st.share * 60)}m`).join(', ')}`);
+  if (x.scratchHours > 0.01 && x.otherXp?.length) parts.push(`also ${x.otherXp.filter(([, v]) => v > 1).map(([sk, v]) => `${fmtGp(v)} ${esc(sk)} xp/hr`).join(', ')}`);
+  return parts.length ? `<span class="route-note">${parts.join(' · ')}</span>` : '';
 }
 
 function guildSection(sk) {
@@ -1006,13 +1018,21 @@ function viewUnlocks() {
     return `<button class="up-row" data-tskill-go="${esc(skill)}" data-target-go="${need}">
       <span class="ico">${img(methodIcon(x.m), '', 34)}</span>
       <div class="title"><b>${esc(x.m.n)}</b><span class="sub">${img(skillIcon(x.m.s), '', 15)}${x.m.s}<span class="sep">·</span><span class="need">needs ${x.missing.map((s) => esc(s.text)).join(', ')}</span></span></div>
-      <div class="progress"><div class="track"><i style="width:${prog}%"></i></div><small class="num">${fmtGp(xpLeft)} xp${best ? ` · ~${fmtDuration(xpLeft / best.xph)}` : ''}</small></div>
+      <div class="progress"><div class="track"><i style="width:${prog}%"></i></div><small class="num">${fmtGp(xpLeft)} xp${best && xpLeft > 0 ? ` · ~${fmtDuration(planHours(skill, need))}` : ''}</small></div>
       <div class="gph"><span class="v num">${fmtGp(x.gph)}</span> <span class="u">gp/hr</span></div>
     </button>`;
   }).join('')}</div>`).join('') || '<div class="empty"><b>Everything is unlocked.</b>Nothing left to chase.</div>'}</div>
   ${gameBestSection()}
   ${perSkill.size ? `<h3 class="bu-h3">Beats your best in that skill</h3><div class="bu-skills">${[...perSkill.entries()].sort((a, b) => a[1][0].hours - b[1][0].hours).map(([sk, xs]) => `<div class="bu-skill"><div class="bu-sk">${img(skillIcon(sk), '', 20)}<b>${sk}</b><span class="muted">now ${fmtGp(xs[0].skillBest?.gph ?? 0)}/hr</span></div>${xs.map(row).join('')}</div>`).join('')}</div>` : ''}
 `;
+}
+
+/** Hours to reach a level with the full training planner (bank stock first, inputs made from scratch), cached per save. */
+function planHours(sk, lvl) {
+  state.planCache ||= new Map();
+  const k = sk + lvl;
+  if (!state.planCache.has(k)) state.planCache.set(k, E().planLevel(sk, lvl).hours);
+  return state.planCache.get(k);
 }
 
 /** The top money makers for a maxed account, and how far you are from each. */

@@ -103,7 +103,7 @@ Each bonus applies where its context matches: skill, recipe, category, subcatego
 
 - **From scratch** uses a Dinkelbach-style fixed point. Your time is valued at the best rate you can reach (λ gp/ms). Each item's cost is then `min(shop price, Σ input costs + λ·time − by-product value)`, relaxed until it stops changing.
 - **Mastery guild ranks** come from task points. Goal and trigger tasks are read from the save. Level, item-statistic and value-statistic conditions are evaluated. Anything else counts toward an upper bound only, and a requirement that falls between the bounds shows as "probably".
-- **Training plans** step through level bands. In each band they use the best XP/hr (or gold/hr) method available, re-evaluating whenever a new method unlocks.
+- **Training plans** step through level bands, re-evaluating whenever a new method unlocks. In each band they pick the method that reaches the band's XP soonest. Inputs come from your bank first, with no gathering time, until they run out. After that the inputs are made from scratch: the cheapest production chain's time is added, and XP earned in the same skill along the way counts (e.g. crafting Water Runes while training on Fire Wands). The same per-hour-of-play rates drive the XP/hr table, guild task estimates, pet estimates and unlock times.
 - **Upgrade advice** re-runs the whole engine with the upgrade added. It compares your best money maker and best XP/hr in that skill before and after.
 
 ## Deploying
