@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241129';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241129';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241129';
+import { decodeSave } from './save.js?v=202611241136';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241136';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241136';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -81,6 +81,7 @@ function setHash() {
 }
 
 function applyPlayer() {
+  state.planCache = new Map();
   E().setPlayer(state.save, { useMods: state.mods });
   state.base.setPlayer(state.save, { useMods: false });
 }
@@ -990,8 +991,9 @@ function viewUnlocks() {
   return `
   <div class="section-head"><div><h2>Next unlocks</h2><p>Money makers you are close to unlocking that pay more than what you can do now. Each is valued from scratch at its unlock level, using today's input costs, and compared with your best sustainable rate (bank stock runs out). Click one to open its training route.</p></div></div>
   ${all.length ? `<h3 class="bu-h3">Beats everything you can do now</h3><div class="bu-grid stagger">${all.slice(0, 6).map(card).join('')}</div>` : `<div class="note">${svg.info}<span>Nothing within 25 levels beats your current best of ${fmtGp(better.nowBest)}/hr from scratch.</span></div>`}
-  ${perSkill.size ? `<h3 class="bu-h3">Beats your best in that skill</h3><div class="bu-skills">${[...perSkill.entries()].sort((a, b) => a[1][0].hours - b[1][0].hours).map(([sk, xs]) => `<div class="bu-skill"><div class="bu-sk">${img(skillIcon(sk), '', 20)}<b>${sk}</b><span class="muted">now ${fmtGp(xs[0].skillBest?.gph ?? 0)}/hr</span></div>${xs.map(row).join('')}</div>`).join('')}</div>` : ''}
-  <details class="owned"><summary><b>All upcoming unlocks</b> <span class="muted">valued at sell prices for inputs</span></summary><div style="padding:0 16px 16px">
+  <h3 class="bu-h3">Coming up next</h3>
+  <p class="bu-p">Every money maker you are close to, grouped by how many levels away it is. These are valued at the level where they open, with inputs at their sell value.</p>
+  <div class="upcoming">
   ${[...groups.entries()].map(([k, xs]) => `<div class="up-group"><h3>${k}</h3>${xs.slice(0, 10).map((x) => {
     const lvReq = x.missing.find((s) => s.kind === 'lvl');
     const skill = lvReq?.skill || x.m.s;
@@ -1007,7 +1009,48 @@ function viewUnlocks() {
       <div class="progress"><div class="track"><i style="width:${prog}%"></i></div><small class="num">${fmtGp(xpLeft)} xp${best ? ` · ~${fmtDuration(xpLeft / best.xph)}` : ''}</small></div>
       <div class="gph"><span class="v num">${fmtGp(x.gph)}</span> <span class="u">gp/hr</span></div>
     </button>`;
-  }).join('')}</div>`).join('') || '<div class="empty"><b>Everything is unlocked.</b>Nothing left to chase.</div>'}</div></details>`;
+  }).join('')}</div>`).join('') || '<div class="empty"><b>Everything is unlocked.</b>Nothing left to chase.</div>'}</div>
+  ${gameBestSection()}
+  ${perSkill.size ? `<h3 class="bu-h3">Beats your best in that skill</h3><div class="bu-skills">${[...perSkill.entries()].sort((a, b) => a[1][0].hours - b[1][0].hours).map(([sk, xs]) => `<div class="bu-skill"><div class="bu-sk">${img(skillIcon(sk), '', 20)}<b>${sk}</b><span class="muted">now ${fmtGp(xs[0].skillBest?.gph ?? 0)}/hr</span></div>${xs.map(row).join('')}</div>`).join('')}</div>` : ''}
+`;
+}
+
+/** The top money makers for a maxed account, and how far you are from each. */
+function gameBestSection() {
+  const e = E();
+  if (!state.gameBest) {
+    const eng = new Engine(G());
+    eng.setPlayer(explorerSave());
+    state.gameBest = eng.ranked('chain').filter((x) => x.m.s !== 'Combat').slice(0, 15).map((x) => ({ m: x.m, gph: x.gph }));
+  }
+  const mine = new Map(e.ranked('chain').map((x) => [x.m.id, x.gph]));
+  state.planCache ||= new Map();
+  const timeTo = (sk, lvl) => {
+    const k = sk + lvl;
+    if (!state.planCache.has(k)) state.planCache.set(k, e.planLevel(sk, lvl).hours);
+    return state.planCache.get(k);
+  };
+  const max = state.gameBest[0]?.gph || 1;
+  return `<h3 class="bu-h3">Best money makers in the game</h3>
+  <p class="bu-p">The highest-paying methods for a maxed account (every skill 99, every upgrade), from scratch, and how far you are from each. Combat is left out because it depends on gear.</p>
+  <div class="gb-list">${state.gameBest.map((x, i) => {
+    const st = e.status(x.m);
+    const lv = new Map();
+    for (const q of st.missing) if (q.kind === 'lvl') lv.set(q.skill, Math.max(lv.get(q.skill) || 0, q.need));
+    const other = st.missing.filter((q) => q.kind !== 'lvl');
+    const hours = [...lv.entries()].reduce((a, [sk, l]) => a + (NOT_TRAINABLE.has(sk) ? 0 : timeTo(sk, l)), 0);
+    const first = [...lv.entries()][0];
+    const status = st.unlocked
+      ? `<span class="pill green">${svg.check}Unlocked${mine.has(x.m.id) ? ` · ${fmtGp(mine.get(x.m.id))}/hr for you` : ''}</span>`
+      : `<span class="gb-need">${[...lv.entries()].map(([sk, l]) => `${esc(sk)} ${l} <span class="muted">(+${l - e.level(sk)})</span>`).concat(other.map((q) => esc(q.text))).join(' · ')}${hours > 0 && Number.isFinite(hours) ? `<small>~${fmtDuration(hours)} of training</small>` : ''}</span>`;
+    return `<button class="gb-row ${st.unlocked ? 'have' : ''}" ${first ? `data-tskill-go="${esc(first[0])}" data-target-go="${first[1]}"` : `data-item="${esc(x.m.primary || '')}"`}>
+      <span class="rank num">${i + 1}</span>
+      ${img(methodIcon(x.m), '', 32)}
+      <span class="title"><b>${esc(x.m.n)}</b><span class="sub">${img(skillIcon(x.m.s), '', 14)}${x.m.s}${x.m.loc ? `<span class="sep">·</span>${esc(x.m.loc)}` : ''}</span></span>
+      ${status}
+      <span class="gb-v"><b class="num gold">${fmtGp(x.gph)}</b><small>gp/hr maxed</small><i style="width:${(x.gph / max) * 100}%"></i></span>
+    </button>`;
+  }).join('')}</div>`;
 }
 
 // ---------------------------------------------------------------- item drawer

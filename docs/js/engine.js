@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill } from './combat.js?v=202611241129';
+import { playerFighter, enemyFighter, fight, dropsPerKill } from './combat.js?v=202611241136';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -655,7 +655,8 @@ export class Engine {
         const primQ = (r.outs.find(([it]) => it === m.primary)?.[1] ?? 0) / r.aph;
         if (primQ <= 1e-9) continue;
         const byproducts = r.outs.reduce((a, [it, q]) => a + (it === m.primary ? 0 : (q / r.aph) * this.value(it)), 0) + r.gp / r.aph;
-        const gpPer = (gp - byproducts) / primQ;
+        // By-products can pay for part of the inputs, but never make the item "cost" negative gold.
+        const gpPer = Math.max(0, (gp - byproducts) / primQ);
         const tPer = t / primQ;
         const total = gpPer + lambda * tPer;
         const cur = costs.get(m.primary);
