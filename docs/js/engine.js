@@ -262,7 +262,8 @@ export class Engine {
         cost += q * b;
       } else return null;
     }
-    if (!r.ins.length) return null;
+    // Not a bank method unless at least one input actually comes from your bank.
+    if (!r.ins.length || !limiting.length) return null;
     const gpPerHour = r.outValue - cost;
     return { gpPerHour, hours, total: gpPerHour * hours, limiting, r };
   }

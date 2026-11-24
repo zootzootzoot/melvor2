@@ -188,10 +188,15 @@ def main():
             "t": [short(b["BankTag"]) for b in it.get("BankTags") or [] if b.get("IsProduct")],
         }
 
-    # shop: buyable items priced in GP (unlimited, single currency)
+    # shop: buyable items priced in GP (unlimited, single currency).
+    # Only purchases registered in the Shop entity config actually appear in the game's
+    # shop; the rest (e.g. GrainStarterPack, Cowhide) are defined but unused.
+    listed = {short(p["Id"]) for p in EC["MelvorBase:Shop"]["Purchases"]}
     shop = {}
     buy = {}
     for s in O["ShopPurchase"]:
+        if s["Id"] not in listed:
+            continue
         cur = [[short(c["Currency"]), c["Quantity"]] for c in s["Costs"]["Currencies"]]
         shop[s["Id"]] = {"n": s["DisplayName"], "i": icon(s.get("Icon")), "cost": cur,
                          "ci": iq(s["Costs"]["Items"]), "r": reqs_of(s.get("Requirements"))}
