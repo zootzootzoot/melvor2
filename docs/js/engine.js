@@ -803,6 +803,62 @@ export class Engine {
     return out.slice(0, limit);
   }
 
+  /**
+   * Locked methods that would pay more than what you can do today, valued from scratch at their
+   * unlock level with today's input costs, plus the training time to get there.
+   */
+  betterUnlocks(maxGap = 25) {
+    if (this._cache.has('better')) return this._cache.get('better');
+    const { costs } = this.solveChains();
+    const best = this.ranked('chain'); // sustainable rates: bank stock runs out
+    const nowBest = best[0]?.gph ?? 0;
+    const skillBest = new Map();
+    for (const x of best) if (!skillBest.has(x.m.s)) skillBest.set(x.m.s, x);
+    const planCache = new Map();
+    const timeTo = (sk, lvl) => {
+      const k = sk + lvl;
+      if (!planCache.has(k)) planCache.set(k, this.planLevel(sk, lvl).hours);
+      return planCache.get(k);
+    };
+    const out = [];
+    for (const m of this.methods) {
+      if (m.k === 'passive') continue;
+      const st = this.status(m);
+      if (st.unlocked || !st.onlyLevelLocked || st.levelGap > maxGap) continue;
+      const lv = { ...this.levels };
+      for (const r of m.r) if (r.t === 'lvl') lv[r.s] = Math.max(lv[r.s] ?? 1, r.l);
+      const r = this.rate(m, lv);
+      let gpSpent = 0, tUp = 0, ok = true;
+      for (const [it, q] of r.ins) {
+        const c = costs.get(it);
+        if (c) { gpSpent += c.gp * q; tUp += c.t * q; continue; }
+        const p = this.buyPrice(it);
+        if (Number.isFinite(p)) gpSpent += p * q;
+        else if (this.bank[it] > 0) gpSpent += this.value(it) * q;
+        else { ok = false; break; }
+      }
+      if (!ok) continue;
+      const gph = (r.outValue - gpSpent) * (HOUR / (HOUR + tUp));
+      const sb = skillBest.get(m.s)?.gph ?? 0;
+      if (gph <= sb || gph <= 0) continue;
+      const need = new Map();
+      for (const x of st.missing) if (x.kind === 'lvl') need.set(x.skill, Math.max(need.get(x.skill) || 0, x.need));
+      const needs = [...need.entries()].map(([skill, level]) => ({ skill, level, gap: level - this.level(skill) }));
+      const hours = needs.reduce((a, n) => a + timeTo(n.skill, n.level), 0);
+      out.push({ m, gph, r, needs, hours, gap: st.levelGap, beatsAll: gph > nowBest, gain: gph - nowBest, skillGain: gph - sb, skillBest: skillBest.get(m.s) });
+    }
+    // keep the best option per (skill, unlock level), then order by how soon it pays off
+    const seen = new Map();
+    for (const x of out.sort((a, b) => b.gph - a.gph)) {
+      const k = x.needs.map((n) => n.skill + n.level).join('|');
+      if (!seen.has(k)) seen.set(k, x);
+    }
+    const list = [...seen.values()].sort((a, b) => (b.beatsAll - a.beatsAll) || a.hours - b.hours);
+    const res = { nowBest, best: best[0], list };
+    this._cache.set('better', res);
+    return res;
+  }
+
   /** For each bank item: what's the best thing to turn it into? */
   alchemy() {
     const unlocked = this.unlockedMethods().filter((m) => m.k === 'active' && m.in.length);

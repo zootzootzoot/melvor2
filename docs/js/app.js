@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241121';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241121';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241121';
+import { decodeSave } from './save.js?v=202611241123';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241123';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241123';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -414,11 +414,25 @@ function viewMoney() {
       <div class="search">${svg.search}<input id="q" type="search" placeholder="Search item or method" value="${esc(state.q)}" aria-label="Search methods"/></div>
     </div>
   </div>
+  ${!state.explorer && (state.mode === 'best' || state.mode === 'chain') && !state.skill && !state.q ? reachBanner() : ''}
   ${top ? topPick(top) : ''}
   <div class="list" id="list">
     ${rows.length ? rows.slice(0, state.limit).map((x, i) => methodRow(x, i, max)).join('') : emptyMoney()}
   </div>
   ${rows.length > state.limit ? `<button class="btn more-btn" id="more">Show ${Math.min(30, rows.length - state.limit)} more <span class="muted">· ${rows.length - state.limit} left</span></button>` : ''}`;
+}
+
+function reachBanner() {
+  const b = E().betterUnlocks();
+  const x = b.list.filter((y) => y.beatsAll).sort((p, q) => p.hours - q.hours)[0];
+  if (!x) return '';
+  const n = x.needs[0];
+  return `<button class="reach panel" data-tskill-go="${esc(n?.skill || x.m.s)}" data-target-go="${n?.level || x.m.lv}">
+    <span class="reach-k">${svg.spark} Within reach</span>
+    ${img(methodIcon(x.m), '', 30)}
+    <span><b>${esc(x.m.n)}</b> pays <b class="gold">${fmtGp(x.gph)}/hr</b>, <span class="green">+${fmtGp(x.gain)}</span> over your best today. Needs ${x.needs.map((k) => `${esc(k.skill)} ${k.level}`).join(' + ')}, about <b>${fmtDuration(x.hours)}</b> of training.</span>
+    <span class="reach-go">Plan it ${svg.arrow}</span>
+  </button>`;
 }
 
 function emptyMoney() {
@@ -922,8 +936,28 @@ function viewUnlocks() {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(x);
   }
+  const better = e.betterUnlocks();
+  const all = better.list.filter((x) => x.beatsAll);
+  const perSkill = new Map();
+  for (const x of better.list.filter((x) => !x.beatsAll)) { if (!perSkill.has(x.m.s)) perSkill.set(x.m.s, []); if (perSkill.get(x.m.s).length < 3) perSkill.get(x.m.s).push(x); }
+  const goBtn = (x) => `data-tskill-go="${esc(x.needs[0]?.skill || x.m.s)}" data-target-go="${x.needs[0]?.level || x.m.lv}"`;
+  const card = (x) => `<button class="bu-card panel" ${goBtn(x)}>
+      <div class="bu-top">${img(methodIcon(x.m), '', 40)}<div><b>${esc(x.m.n)}</b><span class="muted">${img(skillIcon(x.m.s), '', 14)}${x.m.s}${x.m.loc ? ` · ${esc(x.m.loc)}` : ''}</span></div></div>
+      <div class="bu-v"><span class="num gold">${fmtGp(x.gph)}</span><small>gp/hr from scratch</small></div>
+      <div class="bu-gain"><b class="green num">+${fmtGp(x.gain)}</b> over your best today (${esc(better.best?.m.n || '')}, ${fmtGp(better.nowBest)}/hr)</div>
+      <div class="bu-need">${svg.target} ${x.needs.map((n) => `${esc(n.skill)} ${n.level} <span class="muted">(${n.gap} level${n.gap === 1 ? '' : 's'})</span>`).join(' + ')}<span class="bu-h">${svg.clock} ~${fmtDuration(x.hours)} of training</span></div>
+    </button>`;
+  const row = (x) => `<button class="bu-row" ${goBtn(x)}>
+      ${img(methodIcon(x.m), '', 30)}
+      <span class="title"><b>${esc(x.m.n)}</b><span class="sub">${x.needs.map((n) => `${esc(n.skill)} ${n.level}`).join(' + ')}<span class="sep">·</span>~${fmtDuration(x.hours)}</span></span>
+      <span class="num muted">${fmtGp(x.skillBest?.gph ?? 0)} →</span>
+      <span class="num gold">${fmtGp(x.gph)}<small> gp/hr</small></span>
+    </button>`;
   return `
-  <div class="section-head"><div><h2>Next unlocks</h2><p>The most lucrative money makers you haven't unlocked yet, valued at the level where they open, with inputs at their sell value. The time estimate uses your fastest training method.</p></div></div>
+  <div class="section-head"><div><h2>Next unlocks</h2><p>Money makers you are close to unlocking that pay more than what you can do now. Each is valued from scratch at its unlock level, using today's input costs, and compared with your best sustainable rate (bank stock runs out). Click one to open its training route.</p></div></div>
+  ${all.length ? `<h3 class="bu-h3">Beats everything you can do now</h3><div class="bu-grid stagger">${all.slice(0, 6).map(card).join('')}</div>` : `<div class="note">${svg.info}<span>Nothing within 25 levels beats your current best of ${fmtGp(better.nowBest)}/hr from scratch.</span></div>`}
+  ${perSkill.size ? `<h3 class="bu-h3">Beats your best in that skill</h3><div class="bu-skills">${[...perSkill.entries()].sort((a, b) => a[1][0].hours - b[1][0].hours).map(([sk, xs]) => `<div class="bu-skill"><div class="bu-sk">${img(skillIcon(sk), '', 20)}<b>${sk}</b><span class="muted">now ${fmtGp(xs[0].skillBest?.gph ?? 0)}/hr</span></div>${xs.map(row).join('')}</div>`).join('')}</div>` : ''}
+  <details class="owned"><summary><b>All upcoming unlocks</b> <span class="muted">valued at sell prices for inputs</span></summary><div style="padding:0 16px 16px">
   ${[...groups.entries()].map(([k, xs]) => `<div class="up-group"><h3>${k}</h3>${xs.slice(0, 10).map((x) => {
     const lvReq = x.missing.find((s) => s.kind === 'lvl');
     const skill = lvReq?.skill || x.m.s;
@@ -939,7 +973,7 @@ function viewUnlocks() {
       <div class="progress"><div class="track"><i style="width:${prog}%"></i></div><small class="num">${fmtGp(xpLeft)} xp${best ? ` · ~${fmtDuration(xpLeft / best.xph)}` : ''}</small></div>
       <div class="gph"><span class="v num">${fmtGp(x.gph)}</span> <span class="u">gp/hr</span></div>
     </button>`;
-  }).join('')}</div>`).join('') || '<div class="empty"><b>Everything is unlocked.</b>Nothing left to chase.</div>'}`;
+  }).join('')}</div>`).join('') || '<div class="empty"><b>Everything is unlocked.</b>Nothing left to chase.</div>'}</div></details>`;
 }
 
 // ---------------------------------------------------------------- item drawer
