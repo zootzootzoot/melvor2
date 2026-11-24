@@ -792,3 +792,22 @@ dialog::backdrop { background: rgba(5, 6, 10, .6); backdrop-filter: blur(3px); }
 .reach-k { display: inline-flex; gap: 6px; align-items: center; color: var(--green); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; white-space: nowrap; }
 .reach-go { display: inline-flex; gap: 6px; align-items: center; color: var(--gold-1); font-weight: 600; white-space: nowrap; }
 @media (max-width: 640px) { .reach { grid-template-columns: 30px 1fr; } .reach-k, .reach-go { display: none; } .bu-skills, .bu-grid { grid-template-columns: 1fr; } .bu-row { grid-template-columns: 30px minmax(0,1fr) auto; } .bu-row > .muted { display: none; } }
+
+.fight { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 14px; margin-top: 6px; }
+.fight span { display: grid; }
+.fight small { font-size: 11px; color: var(--text-3); }
+.fight b { font-size: 14px; }
+.fight b.warn { color: #ffd59a; }
+.fighter { display: grid; grid-template-columns: auto 1fr auto; gap: 10px 22px; align-items: center; padding: 14px 18px; margin-bottom: 12px; }
+.fg-w { display: flex; gap: 12px; align-items: center; }
+.fg-w img { width: 40px; height: 40px; }
+.fg-w b { display: block; font-size: 15px; }
+.fg-w .muted { font-size: 12.5px; }
+.fg-s { display: flex; gap: 22px; }
+.fg-s span { display: grid; }
+.fg-s small { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; }
+.fg-gear { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.fg-gear span { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: rgba(0, 0, 0, .25); cursor: pointer; }
+.fg-gear img { width: 26px; height: 26px; }
+.fg-note { grid-column: 1 / -1; margin: 0; font-size: 12.5px; }
+@media (max-width: 860px) { .fighter { grid-template-columns: 1fr; } .fg-gear { justify-content: flex-start; } .fight { grid-template-columns: 1fr 1fr; } }

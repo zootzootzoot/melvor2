@@ -84,7 +84,7 @@ Rates use the game's own stat computers and action handlers, with your bonuses a
 - equipped toolbelt items;
 - mastery guild rank rewards.
 
-Each bonus applies where its context matches: skill, recipe, category, subcategory, product item or fishing location. Potion, pet, astrology and agility bonuses are not applied yet. Combat isn't modelled.
+Each bonus applies where its context matches: skill, recipe, category, subcategory, product item or fishing location. Astrology and agility bonuses are not applied yet.
 
 | Skill | Model |
 |---|---|
@@ -97,6 +97,7 @@ Each bonus applies where its context matches: skill, recipe, category, subcatego
 | Herblore | One brew is prepare + heat + stir, then **10 bottlings**. Each bottling spends ingredients and yields products + XP, so time per potion = `(prepare + heat + stir)/10 + bottling`. |
 | Firemaking | Interval, preservation, by-product chances, and currency rewards with doubling. |
 | Hunting | Per animal caught: surveys until tracks are found (the third always succeeds), tracking steps (random between min and max, with skip chance), then trap attempts at the trap success chance. Each attempt uses one trap (the cheapest of the animal's trap type) unless preserved. A failed attempt re-tracks the minimum steps unless you reattempt. |
+| Combat | Per enemy, from your equipped gear and combat levels. Accuracy and evasion are `⌊(level ratio + 9) × (stance bonus + 64)⌋`, and hit chance is `acc ≥ eva ? 1 − eva/(2·acc) : acc/(2·eva)`. Max hit is `⌊22 + L + (L+17)·strength bonus/64⌋`. Damage rolls uniformly from 1 to max hit, minus resistance `clamp(prot/(pow+prot), 0, 0.7)` and armour. Kill time is HP ÷ DPS + 3 s respawn, using the best stance for your weapon. Damage taken comes from the enemy's stances against your evasion and protection, and is costed as your cheapest food. Drops are expected values of fixed items, weighted tables and gold. Enemies that can deal ≥ 90% of your HP in one hit, or take over 20 minutes to kill, are excluded. Special attacks, passives, prayers, spells and slayer tasks are not modelled. |
 | Farming | Passive, per plot (base rates). |
 | Ranching | Passive, per adult animal per product interval, before happiness, variant and feed bonuses. |
 

@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241123';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241123';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241123';
+import { decodeSave } from './save.js?v=202611241129';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241129';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241129';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -415,6 +415,7 @@ function viewMoney() {
     </div>
   </div>
   ${!state.explorer && (state.mode === 'best' || state.mode === 'chain') && !state.skill && !state.q ? reachBanner() : ''}
+  ${state.skill === 'Combat' ? fighterBanner() : ''}
   ${top ? topPick(top) : ''}
   <div class="list" id="list">
     ${rows.length ? rows.slice(0, state.limit).map((x, i) => methodRow(x, i, max)).join('') : emptyMoney()}
@@ -583,7 +584,7 @@ function details(x) {
         <span>From scratch <b class="num">${fmtGp(x.src === 'bank' ? x.chain.gpPerHour : x.gph)}</b>/hr</span>
         <span>From your bank <b class="num green">${fmtGp(x.src === 'bank' ? x.gph : x.bankAlt.gpPerHour)}</b>/hr for ${fmtDuration((x.src === 'bank' ? x.bank : x.bankAlt).hours)}</span></div></div>` : '';
   const ex = r.extra || {};
-  const timeNote = m.x?.t === 'hunt' ? `${fmtNum(ex.surveys, 1)} surveys, ${fmtNum(ex.steps, 1)} steps, ${fmtNum(ex.attempts, 1)} trap tries` : m.x?.t === 'herb' ? `${fmtMs(ex.batch)} per brew of ${ex.bottles}` : m.x?.t === 'wc' ? `${fmtNum(ex.hits, 1)} swings` : m.x?.t === 'mine' ? `~${fmtNum(ex.hits, 1)} swings` : m.x?.t === 'art' && ex.steps > 1 ? `${fmtNum(ex.stepsTaken, 1)} of ${ex.steps} steps` : (m.note || '');
+  const timeNote = m.x?.t === 'fight' ? 'per kill, including the 3s respawn' : m.x?.t === 'hunt' ? `${fmtNum(ex.surveys, 1)} surveys, ${fmtNum(ex.steps, 1)} steps, ${fmtNum(ex.attempts, 1)} trap tries` : m.x?.t === 'herb' ? `${fmtMs(ex.batch)} per brew of ${ex.bottles}` : m.x?.t === 'wc' ? `${fmtNum(ex.hits, 1)} swings` : m.x?.t === 'mine' ? `~${fmtNum(ex.hits, 1)} swings` : m.x?.t === 'art' && ex.steps > 1 ? `${fmtNum(ex.stepsTaken, 1)} of ${ex.steps} steps` : (m.note || '');
 
   return `<div class="content">
     <table class="ledger">
@@ -602,12 +603,45 @@ function details(x) {
         : `<div class="fact"><div class="k">Gross value / hour</div><div class="v num">${fmtGp(r.outValue)}</div></div>`}
       ${compare}
       ${x.bank && !compare ? `<div class="fact wide"><div class="k">Your bank</div><div class="v">Runs for <b class="gold">${fmtDuration(x.bank.hours)}</b>, ${fmtGp(x.bank.total, { sign: true })} profit total. Limited by ${x.bank.limiting.map((it) => esc(e.name(it))).join(', ')}.</div></div>` : ''}
+      ${m.x?.t === 'fight' ? fightFacts(x, r) : ''}
       ${m.x?.t === 'thv' ? `<div class="fact wide"><div class="k">Heads up</div><div class="v" style="font-weight:400">A failed attempt stuns you for ${fmtMs(ex.stun || 2000)} and hits for up to ${m.dmg} HP, so bring food. ${ex.stages > 1 ? `Takes ${ex.stages} stages to finish.` : ''}</div></div>` : ''}
       ${upgradesFact(m, r)}
       ${split}
       ${chainLinks}
       <div class="fact wide"><div class="k">Requirements</div><div class="reqs">${reqs || '<span class="muted">None</span>'}</div>${st.unverified.length ? '<div class="muted" style="font-size:12px;margin-top:6px">Amber requirements cannot be read from the save yet, so they are assumed met.</div>' : ''}</div>
     </div>
+  </div>`;
+}
+
+function fightFacts(x, r) {
+  const f = r.extra?.fight;
+  if (!f) return '';
+  const e = E();
+  const st = G().combat.stances[f.stance];
+  const foodHr = r.ins.find(([it]) => it === r.extra.food)?.[1] || 0;
+  const danger = f.danger >= 0.5 ? 'red' : f.danger >= 0.25 ? 'warn' : 'green';
+  return `<div class="fact wide"><div class="k">The fight</div><div class="fight">
+    <span><small>Your stance</small><b>${esc(st?.n || f.stance)}</b></span>
+    <span><small>Hit chance</small><b class="num">${fmtPct(f.hc, 0)}</b></span>
+    <span><small>Your max hit</small><b class="num">${fmtNum(f.mh)}</b></span>
+    <span><small>Per kill</small><b class="num">${fmtMs(r.ms)}</b></span>
+    <span><small>Enemy max hit</small><b class="num ${danger}">${fmtNum(f.enemyMax)}</b><small>${fmtPct(f.danger, 0)} of your HP</small></span>
+    <span><small>Damage taken</small><b class="num">${fmtNum(f.takenPerKill * r.aph)}/hr</b>${foodHr > 0 ? `<small>~${fmtNum(foodHr, 1)} ${esc(e.name(r.extra.food))}/hr</small>` : ''}</span>
+  </div>${G().combat.enemies[x.m.rid]?.special ? '<div class="muted" style="font-size:12px;margin-top:6px">This enemy has special attacks or passives that are not modelled, so expect more damage taken than shown.</div>' : ''}</div>`;
+}
+
+function fighterBanner() {
+  const e = E();
+  const F = e.fighter;
+  if (!F || state.explorer) return '';
+  const g = G();
+  const w = F.weapon ? g.items[F.weapon] : null;
+  const gear = Object.values(state.save.equipment || {}).map((x) => x.item).filter((it) => g.items[it]);
+  return `<div class="panel fighter">
+    <div class="fg-w">${img(w?.i || g.skills.Combat?.i, '', 40)}<div><b>${esc(w?.n || 'Unarmed')}</b><span class="muted">${esc(F.stances.map((x) => g.combat.stances[x]?.n || x).join(' / '))} · ${fmtMs(F.interval)} per attack</span></div></div>
+    <div class="fg-s"><span><small>HP</small><b class="num">${fmtNum(F.hp)}</b></span><span><small>Power</small><b class="num">${fmtNum(F.pow)}</b></span><span><small>Protection</small><b class="num">${fmtNum(F.prot)}</b></span><span><small>Food</small><b>${e.food ? esc(e.name(e.food)) : 'none'}</b></span></div>
+    <div class="fg-gear">${gear.map((it) => `<span data-item="${esc(it)}" title="${esc(g.items[it].n)}">${img(g.items[it].i, '', 26)}</span>`).join('')}</div>
+    <p class="muted fg-note">Rates use the gear you had equipped when you saved. Enemies that can hit you for 90% of your HP, or take over 20 minutes to kill, are left out. Special attacks, prayers, spells and slayer tasks are not modelled yet.</p>
   </div>`;
 }
 
@@ -634,7 +668,7 @@ function chainTree(chain) {
 // ---------------------------------------------------------------- training
 function viewTrain() {
   const e = E(), g = G(), s = state.save;
-  const skills = SKILL_ORDER.filter((k) => !PASSIVE_SKILLS.has(k) && e.methods.some((m) => m.s === k));
+  const skills = SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k));
   if (!skills.includes(state.trainSkill)) {
     // default: the skill closest to its next level by time
     state.trainSkill = skills.map((k) => ({ k, o: e.trainOptions(k)[0] })).filter((x) => x.o).sort((a, b) => {

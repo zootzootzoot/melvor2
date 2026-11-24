@@ -228,6 +228,24 @@ def main():
             "c": [short(c) for c in (it.get("Capabilities") or {})],
             "t": [short(b["BankTag"]) for b in it.get("BankTags") or [] if b.get("IsProduct")],
         }
+        caps = it.get("Capabilities") or {}
+        eq = caps.get(NS + "Equipment")
+        if eq:
+            st = eq.get("Stats") or {}
+            items[it["Id"]]["eq"] = {
+                "slot": short(eq.get("Type")),
+                "st": {short(x["Stat"]): x["Value"] for x in st.get("Stats") or []},
+                "pow": sum(x["Value"] for x in st.get("PowerRatings") or []),
+                "prot": sum(x["Value"] for x in st.get("ProtectionRatings") or []),
+                "ammo": short(eq.get("AmmoType")),
+                "r": reqs_of(eq.get("Requirements")),
+            }
+        wp = caps.get(NS + "Weapon")
+        if wp:
+            items[it["Id"]]["wp"] = {"type": short(wp.get("Type")), "ammo": short(wp.get("RequiredAmmoType"))}
+        food = caps.get(NS + "Food")
+        if food and food.get("BaseHealing"):
+            items[it["Id"]]["heal"] = food["BaseHealing"]
         tb = (it.get("Capabilities") or {}).get(NS + "Toolbelt")
         if tb:
             items[it["Id"]]["slot"] = short(tb.get("FitsInSlot"))
@@ -476,6 +494,51 @@ def main():
                           "skill": short((td.get("Component") or {}).get("Entity")), "scale": td.get("ScaleFactor") if short(tr.get("Type")) == "ChancePerExperience" else None,
                           "how": re.sub(r"([a-z])([A-Z])", r" ", short(tr.get("Type")) or short((pt.get("Goal") or {}).get("Type")) or "")}
 
+    # ---- combat: styles, stances, weapon types, enemies, areas
+    def lvl_ratios(lst):
+        return [[short(x["Level"]), x["Ratio"]] for x in lst or []]
+
+    combat = {"styles": {}, "stances": {}, "weapons": {}, "enemies": {}, "areas": {}}
+    for cs in O["CombatStyle"]:
+        mf = cs.get("MaxHitFormula") or {}
+        md = mf.get("Data") or {}
+        combat["styles"][cs["Id"]] = {
+            "acc": lvl_ratios(cs.get("AccuracyRatingLevels")), "eva": lvl_ratios(cs.get("EvasionLevels")),
+            "max": {"t": short(mf.get("Type")), "str": short(md.get("StrengthBonusStat")), "stat": short(md.get("MaxHitStat")),
+                    "dmg": short(md.get("DamageBonusStat")), "lv": lvl_ratios(md.get("Levels"))},
+            "hp": short(cs.get("MaxHitpointsLevel")), "i": icon(cs.get("Icon")), "n": cs["DisplayName"]}
+    for stn in O["AttackStance"]:
+        combat["stances"][stn["Id"]] = {"n": stn["DisplayName"], "style": short(stn["CombatStyle"]), "acc": short(stn["AccuracyStat"]),
+                                         "eva": short(stn["EvasionStat"]),
+                                         "xp": [[short(x["Component"]["Entity"]), x["ExperiencePerDamage"]] for x in stn.get("ExperienceGain") or []]}
+    for wt in O["WeaponType"]:
+        combat["weapons"][wt["Id"]] = [short(x) for x in wt.get("Stances") or []]
+
+    def drops_of(dr):
+        dr = dr or {}
+        return {"fixed": [[short(x["Item"]), x.get("MinQuantity", 1), x.get("MaxQuantity", 1)] for x in dr.get("FixedItems") or []],
+                "tables": [{"ch": t.get("Chance", 1), "rows": table(t.get("Table"))} for t in dr.get("ItemTables") or []],
+                "gp": next(([x.get("MinQuantity", 0), x.get("MaxQuantity", 0)] for x in dr.get("FixedCurrencies") or [] if short(x["Currency"]) == "GoldPieces"), None),
+                "cur": [[short(x["Currency"]), x.get("MinQuantity", 0), x.get("MaxQuantity", 0)] for x in dr.get("FixedCurrencies") or [] if short(x["Currency"]) != "GoldPieces"]}
+
+    for en in O["Enemy"]:
+        st = en.get("Stats") or {}
+        combat["enemies"][en["Id"]] = {
+            "n": en["DisplayName"], "i": icon(en.get("Sprite")),
+            "lv": {short(x["Key"]): x["Value"] for x in en.get("Levels") or []},
+            "st": {short(x["Stat"]): x["Value"] for x in st.get("Stats") or []},
+            "pow": sum(x["Value"] for x in st.get("PowerRatings") or []),
+            "prot": sum(x["Value"] for x in st.get("ProtectionRatings") or []),
+            "stances": [[short(x["Stance"]), x.get("Weight", 1)] for x in en.get("Stances") or []],
+            "drops": drops_of(en.get("Drops")), "special": bool(en.get("Attacks") or en.get("Passives")),
+            "r": reqs_of(en.get("Requirements")),
+        }
+    area_cats = {c["Id"]: c.get("DisplayName") for c in O.get("CombatAreaCategory", [])}
+    for ar in O["CombatArea"]:
+        combat["areas"][ar["Id"]] = {"n": ar["DisplayName"], "cat": area_cats.get(short(ar.get("Category")), short(ar.get("Category"))),
+                                     "diff": short(ar.get("Difficulty")), "dark": ar.get("Darkness", 0),
+                                     "enemies": [short(x) for x in ar.get("Enemies") or []], "r": reqs_of(ar.get("UnlockRequirements"))}
+
     # ---- icons
     from PIL import Image
     written = 0
@@ -495,7 +558,7 @@ def main():
         im.save(dst, "WEBP", lossless=True, method=6)
         written += 1
     have = set(os.listdir(os.path.join(OUT, "icons")))
-    for coll in (items.values(), methods, shop.values(), skills.values(), shop_cats.values(), pets.values()):
+    for coll in (items.values(), methods, shop.values(), skills.values(), shop_cats.values(), pets.values(), combat["enemies"].values(), combat["styles"].values()):
         for x in coll:
             if x.get("i") and x["i"] not in have:
                 x["i"] = None
@@ -613,7 +676,7 @@ def main():
         "v": 1,
         "gameVersion": "Alpha 0.11.5.5 (save v31)",
         "items": items, "buy": buy, "shop": shop, "methods": methods, "skills": skills, "currencies": cur_icons,
-        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets,
+        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat,
     }
     with open(os.path.join(OUT, "data", "game.json"), "w", encoding="utf-8") as f:
         json.dump(game, f, separators=(",", ":"), ensure_ascii=False)

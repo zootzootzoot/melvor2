@@ -1,3 +1,5 @@
+import { playerFighter, enemyFighter, fight, dropsPerKill } from './combat.js?v=202611241129';
+
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
 // (decompiled from GamesByMalcs.Melvor2.dll); see README "How the numbers are computed".
@@ -7,8 +9,10 @@ export const BASE_STUN_MS = 2000; // ThievingActionComponent.BaseStunInterval
 
 export const SKILL_ORDER = [
   'Woodcutting', 'Fishing', 'Mining', 'Thieving', 'Cooking', 'Smithing', 'Crafting', 'Fletching',
-  'Runecrafting', 'Herblore', 'Beastcrafting', 'Firemaking', 'Hunting', 'Farming', 'Ranching',
+  'Runecrafting', 'Herblore', 'Beastcrafting', 'Firemaking', 'Hunting', 'Combat', 'Farming', 'Ranching',
 ];
+/** "Skills" in SKILL_ORDER that have no level of their own to train. */
+export const NOT_TRAINABLE = new Set(['Combat', 'Farming', 'Ranching']);
 /** Skills whose methods run passively (per plot / per animal), so they aren't trained or ranked as actions. */
 export const PASSIVE_SKILLS = new Set(['Farming', 'Ranching']);
 
@@ -75,7 +79,7 @@ export class Engine {
   constructor(game) {
     this.g = game;
     this.items = game.items;
-    this.methods = game.methods;
+    this.methods = [...game.methods, ...Engine.combatMethods(game)];
     this.byId = new Map(this.methods.map((m) => [m.id, m]));
     this.producers = new Map();
     this.consumers = new Map();
@@ -106,6 +110,30 @@ export class Engine {
     this.setPlayer({ skills: {}, bank: {}, shop: {}, tools: {} });
   }
 
+  /** One money-making "method" per enemy (first non-quest area it appears in), valued per kill. */
+  static combatMethods(game) {
+    const C = game.combat;
+    if (!C) return [];
+    const out = [];
+    const seen = new Set();
+    for (const [aid, a] of Object.entries(C.areas)) {
+      if (a.cat === 'Quests') continue;
+      for (const eid of a.enemies) {
+        const e = C.enemies[eid];
+        if (!e || seen.has(eid)) continue;
+        seen.add(eid);
+        const d = dropsPerKill(e);
+        const r = [...a.r, ...e.r];
+        out.push({
+          id: 'Combat:' + eid, s: 'Combat', n: e.n, i: e.i, k: 'active', ms: 10000, xp: 0, in: [], out: d.items, gp: d.gp,
+          lv: Math.max(1, ...r.filter((q) => q.t === 'lvl').map((q) => q.l)), r, cat: aid, rid: eid, loc: a.n, locId: aid,
+          note: a.cat, x: { t: 'fight', e: eid, dark: a.dark || 0 },
+        });
+      }
+    }
+    return out;
+  }
+
   value(item) { return this.items[item]?.v ?? 0; }
   name(item) { return this.items[item]?.n ?? item; }
 
@@ -123,6 +151,10 @@ export class Engine {
     this._cache = new Map();
     this._rateCache = new Map();
     this.computeGuilds(p);
+    this.fighter = this.g.combat ? playerFighter(this.g, p) : null;
+    // food: the cheapest heal per gold you have in the bank, else Shrimp
+    const foods = Object.keys(this.bank).filter((it) => this.items[it]?.heal > 0).sort((a, b) => this.value(a) / this.items[a].heal - this.value(b) / this.items[b].heal);
+    this.food = foods[0] || (this.items.Shrimp?.heal ? 'Shrimp' : null);
     // Collect active bonuses: owned shop upgrades + equipped toolbelt items + guild rank rewards.
     this.sources = [];
     for (const [sk, gs] of Object.entries(this.guild)) {
@@ -525,6 +557,21 @@ export class Engine {
       for (const [it, q, ch] of x.sp) add(it, surveys * ch * prodQty(q, it) * (1 + d));
       xp = m.xp + (x.svXp || 0) * surveys;
       extra = { surveys, steps, attempts, trapChance: pc, trackChance: tc };
+    } else if (x.t === 'fight') {
+      const C = this.g.combat;
+      const e = C.enemies[x.e];
+      const f = this.fighter && fight(C, this.fighter, enemyFighter(e));
+      if (!f) return { m, succ: 1, ms: 1e12, aph: 0, outs: [], ins: [], gp: 0, xp: 0, outValue: 0, extra: {}, blocked: 'You cannot damage this enemy with your current weapon' };
+      ms = f.killMs;
+      for (const [it, q] of m.out) add(it, q);
+      gp = m.gp;
+      xp = f.xp.reduce((a, [, v]) => a + v, 0);
+      ins = [];
+      if (this.food && f.takenPerKill > 0) ins.push([this.food, f.takenPerKill / this.items[this.food].heal]);
+      if (this.fighter.ammo) ins.push([this.fighter.ammo, f.attacks]);
+      extra = { fight: f, food: this.food };
+      const blocked = f.danger >= 0.9 ? 'Can hit you for most of your HP in one blow' : f.killMs > 20 * 60000 ? 'Takes over 20 minutes per kill' : (this.fighter.ammoNeeded && !this.fighter.ammo) ? 'Your weapon needs ammo' : null;
+      if (blocked) extra.blocked = blocked;
     } else if (x.t === 'fm') {
       ms = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
       const pres = clamp01(M('PreservationChance'));
@@ -545,7 +592,7 @@ export class Engine {
     const xph = (xp + xpFlat * (x?.t === 'thv' ? succ / (extra.perComplete || 1) : (x?.t === 'cook' ? succ : 1))) * xpMult * aph;
     const gph = gp * aph;
     const outValue = outArr.reduce((a, [it, q]) => a + q * this.value(it), 0) + gph;
-    return { m, succ, ms, aph, outs: outArr, ins: insArr, gp: gph, xp: xph, outValue, extra };
+    return { m, succ, ms, aph, outs: outArr, ins: insArr, gp: gph, xp: xph, outValue, extra, blocked: extra.blocked };
   }
 
   buyPrice(item) {
@@ -708,7 +755,7 @@ export class Engine {
   // ---------------------------------------------------------------- views
   unlockedMethods(levelOverride) {
     if (!levelOverride && this._cache.has('unlocked')) return this._cache.get('unlocked');
-    const out = this.methods.filter((m) => this.status(m, levelOverride).unlocked);
+    const out = this.methods.filter((m) => this.status(m, levelOverride).unlocked && !(m.x?.t === 'fight' && this.rate(m, levelOverride).blocked));
     if (!levelOverride) this._cache.set('unlocked', out);
     return out;
   }
