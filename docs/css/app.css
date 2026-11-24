@@ -706,3 +706,15 @@ dialog::backdrop { background: rgba(5, 6, 10, .6); backdrop-filter: blur(3px); }
 .tz-v b.blue { color: var(--blue); }
 .tz-v i { display: block; height: 3px; margin-top: 4px; margin-left: auto; border-radius: 2px; background: linear-gradient(90deg, var(--gold-3), var(--gold-1)); }
 @media (max-width: 860px) { .teaser-grid { grid-template-columns: 1fr; } }
+.seg-h { white-space: nowrap; }
+@media (max-width: 640px) {
+  .seg-row { grid-template-columns: 34px minmax(0, 1fr) auto; }
+  .seg-row .title .sub { white-space: normal; flex-wrap: wrap; row-gap: 0; }
+}
+@media (max-width: 640px) {
+  .mode-switch { display: flex !important; overflow-x: auto; scrollbar-width: none; gap: 6px; mask-image: linear-gradient(90deg, #000 88%, transparent); padding-bottom: 2px; }
+  .mode-switch::-webkit-scrollbar { display: none; }
+  .mode { flex: 0 0 auto; padding: 8px 12px; border-radius: 999px; }
+  .mode b { white-space: nowrap; }
+}
+@media (max-width: 640px) { .filter-row .search { flex: 1 1 100%; } }
