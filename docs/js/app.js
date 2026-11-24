@@ -1,70 +1,94 @@
-import { decodeSave, xpForLevel } from './save.js';
-import { Engine, SKILL_ORDER, HOUR, fmtGp, fmtNum, fmtDuration, fmtMs } from './engine.js';
+import { decodeSave } from './save.js?v=202611241056';
+import { Engine, SKILL_ORDER, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241056';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241056';
 
-const $ = (s, el = document) => el.querySelector(s);
+window.__fmtGp = fmtGp;
 const app = $('#app');
 const tabsEl = $('#tabs');
 const topRight = $('#topbar-right');
 const STORE_KEY = 'melvor-ledger:save';
 const PREF_KEY = 'melvor-ledger:prefs';
-
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ICON = (f) => (f ? `icons/${f}` : 'icons/Icons_missing_artwork.webp');
-const img = (f, alt = '', size = 24) => `<img src="${ICON(f)}" alt="${esc(alt)}" width="${size}" height="${size}" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">`;
-
-const svg = {
-  search: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
-  chev: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
-  arrow: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
-  lock: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
-  shield: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>',
-  info: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
-  paste: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>',
-  file: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
-  check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
-  q: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/></svg>',
-};
+const HIST_KEY = 'melvor-ledger:history:';
 
 const MODES = {
-  chain: { label: 'From scratch', desc: 'You gather every input yourself, or buy it from the shop when that is cheaper' },
-  sell: { label: 'Value added', desc: 'Inputs are priced at what they would sell for, so this is pure processing profit' },
-  bank: { label: 'From my bank', desc: 'Only what your current bank can fuel, and how long it lasts' },
+  best: { label: 'Best overall', desc: 'Whichever pays more: making it from scratch, or using what is already in your bank' },
+  chain: { label: 'From scratch', desc: 'You gather every input yourself, or buy it when the shop is cheaper' },
+  bank: { label: 'From your bank', desc: 'Only what your current bank can fuel, and how long it lasts' },
+  afk: { label: 'Leave it running', desc: 'One action left going while you are away: gathering, or working through your bank' },
+  sell: { label: 'Value added', desc: 'The best crafts, with inputs priced at what they would sell for' },
+};
+const TABS = {
+  money: 'Money makers', train: 'Training', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks',
 };
 
 const state = {
-  game: null, engine: null, save: null, raw: null, explorer: false,
-  tab: 'money', mode: 'chain', skill: '', q: '', passive: false, limit: 30, open: new Set(),
-  bankSort: 'value', bankQ: '', bankSortTotal: true,
+  game: null, engine: null, base: null, save: null, explorer: false,
+  tab: 'money', mode: 'best', skill: '', q: '', passive: false, limit: 30, open: new Set(),
+  bankView: 'process', bankSort: 'value', bankQ: '', bankSortTotal: true,
+  mods: true, trainSkill: '', trainTarget: null, trainPrefer: 'xp', trainLevel: null,
+  upSort: 'payback', upFilter: 'all', history: null, window: 8,
 };
-Object.assign(state, (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch { return {}; } })());
-state.open = new Set();
-const savePrefs = () => localStorage.setItem(PREF_KEY, JSON.stringify({ mode: state.mode, passive: state.passive, bankSort: state.bankSort, tab: state.tab }));
+const PREF_FIELDS = ['window', 'mode', 'passive', 'bankSort', 'tab', 'mods', 'trainSkill', 'trainPrefer', 'upSort', 'bankView', 'bankSortTotal'];
+Object.assign(state, (() => {
+  try {
+    const p = JSON.parse(localStorage.getItem(PREF_KEY)) || {};
+    if (!p.v2) { delete p.mode; delete p.tab; } // v2 introduced "Best overall" as the default view
+    return Object.fromEntries(PREF_FIELDS.filter((k) => k in p).map((k) => [k, p[k]]));
+  } catch { return {}; }
+})());
+if (!MODES[state.mode]) state.mode = 'best';
+if (state.tab === 'alchemy') { state.tab = 'bank'; state.bankView = 'process'; }
+if (state.tab === 'upcoming') state.tab = 'unlocks';
+const savePrefs = () => localStorage.setItem(PREF_KEY, JSON.stringify({ v2: 1, ...Object.fromEntries(PREF_FIELDS.map((k) => [k, state[k]])) }));
 
-function toast(msg) {
-  const t = $('#toast');
-  t.textContent = msg; t.hidden = false;
-  clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), 2600);
-}
+const E = () => state.engine;
+const G = () => state.game;
+const skillIcon = (s) => G().skills[s]?.i;
+const itemIcon = (it) => G().items[it]?.i;
+const methodIcon = (m) => m.i || itemIcon(m.primary) || itemIcon(m.out[0]?.[0]);
+const lookup = {
+  item: (id) => G().items[id]?.n || id,
+  cat: (id) => G().recipeCats?.[id] || id.replace(/([a-z])([A-Z])/g, '$1 $2'),
+  recipe: (rid, s) => E().methods.find((m) => m.rid === rid && (!s || m.s === s))?.n || rid,
+};
 
 // ---------------------------------------------------------------- boot
 async function boot() {
   app.innerHTML = `<div class="loading">${img('Currencies_GoldPieces.webp', '', 56).replace('<img', '<img class="spinner-coin"')}<span>Opening the ledger…</span></div>`;
-  const res = await fetch('data/game.json');
+  const res = await fetch('data/game.json?v=' + (new URL(import.meta.url).searchParams.get('v') || '1'));
   state.game = await res.json();
   $('#game-version').textContent = state.game.gameVersion;
   state.engine = new Engine(state.game);
+  state.base = new Engine(state.game);
   const stored = localStorage.getItem(STORE_KEY);
-  if (location.hash === '#explore') return startExplorer();
+  const h = parseHash();
+  if (h.explore) return startExplorer();
   if (stored) {
     try { await loadSave(stored, { quiet: true }); return; } catch { localStorage.removeItem(STORE_KEY); }
   }
   renderLanding();
 }
 
+function parseHash() {
+  const h = location.hash.replace(/^#\/?/, '');
+  if (h === 'explore') return { explore: true };
+  const [tab, arg] = h.split('/');
+  return { tab: TABS[tab] ? tab : null, arg: arg ? decodeURIComponent(arg) : null };
+}
+function setHash() {
+  const h = state.explorer ? '#explore' : `#${state.tab}${state.tab === 'train' && state.trainSkill ? '/' + state.trainSkill : ''}`;
+  if (location.hash !== h) history.replaceState(null, '', h);
+}
+
+function applyPlayer() {
+  E().setPlayer(state.save, { useMods: state.mods });
+  state.base.setPlayer(state.save, { useMods: false });
+}
+
 async function loadSave(input, { quiet = false } = {}) {
   const save = await decodeSave(input);
   state.save = save; state.explorer = false;
-  state.engine.setPlayer(save);
+  applyPlayer();
   if (typeof input === 'string') { try { localStorage.setItem(STORE_KEY, input.trim()); } catch { /* quota */ } }
   else {
     try {
@@ -73,39 +97,61 @@ async function loadSave(input, { quiet = false } = {}) {
       localStorage.setItem(STORE_KEY, btoa(s));
     } catch { /* ignore */ }
   }
+  state.history = recordHistory(save);
   if (!quiet) toast(`Loaded ${save.header.name}'s save`);
   state.open.clear(); state.limit = 30;
+  const h = parseHash();
+  if (h.tab) { state.tab = h.tab; if (h.tab === 'train' && h.arg) state.trainSkill = h.arg; }
   renderDashboard();
+}
+
+/** Keep a small per-character history of imports to show progress between them. */
+function recordHistory(save) {
+  const key = HIST_KEY + save.header.uuid;
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(key)) || []; } catch { list = []; }
+  const t = save.header.timestamp?.getTime?.() || Date.now();
+  const snap = {
+    t, gp: save.wallet?.GoldPieces ?? save.header.gp ?? 0, tl: save.header.totalLevel,
+    xp: Object.fromEntries(Object.entries(save.skills).map(([k, v]) => [k, Math.round(v.xp)])),
+    bank: Math.round(E().bankValue().total),
+  };
+  if (!list.length || list[list.length - 1].t !== t) list.push(snap);
+  list = list.slice(-60);
+  try { localStorage.setItem(key, JSON.stringify(list)); } catch { /* ignore */ }
+  const prev = list.length > 1 ? list[list.length - 2] : null;
+  return { list, prev, cur: snap };
 }
 
 function startExplorer() {
   const skills = {};
   for (const m of state.game.methods) for (const r of m.r) if (r.t === 'lvl') skills[r.s] = { xp: xpForLevel(99), level: 99 };
   const shop = {};
-  for (const id of Object.keys(state.game.shop)) shop[id] = 999;
-  state.save = { header: { name: 'Explorer', gamemode: 'Every skill at 99', totalLevel: Object.keys(skills).length * 99, gp: 0, timestamp: new Date() }, skills, bank: {}, wallet: {}, shop, tools: {} };
+  for (const id of Object.keys(state.game.shop)) shop[id] = 1;
+  state.save = { header: { name: 'Explorer', gamemode: 'Every skill at 99', totalLevel: Object.keys(skills).length * 99, gp: 0, timestamp: new Date() }, skills, bank: {}, wallet: {}, shop, tools: {}, allGuild: true };
   state.explorer = true;
-  state.engine.setPlayer(state.save);
-  if (state.mode === 'bank') state.mode = 'chain';
-  if (state.tab === 'alchemy' || state.tab === 'bank') state.tab = 'money';
+  state.history = null;
+  applyPlayer();
+  if (state.mode === 'bank' || state.mode === 'best') state.mode = 'chain';
+  if (!['money', 'train'].includes(state.tab)) state.tab = 'money';
   renderDashboard();
 }
 
 // ---------------------------------------------------------------- landing
 function renderLanding(error) {
   tabsEl.hidden = true; topRight.innerHTML = '';
-  const g = state.game;
-  const sk = (s) => g.skills[s]?.i;
+  const sk = skillIcon;
   app.innerHTML = `
   <section class="landing fade-in">
     <div>
-      <span class="eyebrow">Melvor Idle 2 · money planner</span>
-      <h1 class="hero-title">Every coin your account can make, <span class="gild">ranked.</span></h1>
-      <p class="hero-sub">Paste your save string and Melvor Ledger reads your levels, shop unlocks and bank. Then it ranks every money-making method you can do right now by gold per hour.</p>
+      <span class="eyebrow">Melvor Idle 2 · companion</span>
+      <h1 class="hero-title">Know exactly what to do <span class="gild">next.</span></h1>
+      <p class="hero-sub">Paste your save string and Melvor Ledger reads your levels, shop upgrades, tools and bank. It then works out your best money makers, the fastest route to any level, and which upgrade pays for itself first.</p>
       <ul class="hero-points">
-        <li>${img(sk('Mining'), '', 28)}<span><b>Full production chains.</b> Ore to bar to gear, with the time to gather every input counted.</span></li>
-        <li>${img(sk('Bank'), '', 28)}<span><b>Bank alchemy.</b> Find what to turn your idle stacks into before you sell them.</span></li>
-        <li>${img(sk('Thieving'), '', 28)}<span><b>Real game formulas.</b> Success chances, stuns, steps and drop tables come straight from the game files.</span></li>
+        <li>${img(sk('Mining'), '', 28)}<span><b>Money makers.</b> Every method ranked by gold per hour, from scratch or from your bank, with full production chains.</span></li>
+        <li>${img(sk('Smithing'), '', 28)}<span><b>Training planner.</b> The fastest path to any level, the supplies it needs, and what it earns or costs.</span></li>
+        <li>${img(G().skills._Shop?.i || sk('Bank'), '', 28)}<span><b>Upgrade advisor.</b> Which shop upgrade to buy next, and how many hours it takes to pay back.</span></li>
+        <li>${img(sk('Thieving'), '', 28)}<span><b>Real game formulas.</b> Success chances, stuns, steps, preservation and your tool bonuses, straight from the game files.</span></li>
       </ul>
     </div>
     <div class="panel import-card">
@@ -169,30 +215,42 @@ function renderLanding(error) {
 }
 
 // ---------------------------------------------------------------- dashboard
+function tabList() {
+  return state.explorer ? ['money', 'train'] : ['money', 'train', 'upgrades', 'bank', 'unlocks'];
+}
+
 function renderDashboard() {
-  const e = state.engine;
+  const e = E();
   const s = state.save;
-  const g = state.game;
-  const tabs = state.explorer
-    ? [['money', 'Money makers'], ['upcoming', 'All methods']]
-    : [['money', 'Money makers'], ['alchemy', 'Bank alchemy'], ['bank', 'Your bank'], ['upcoming', 'Next unlocks']];
-  if (!tabs.some(([k]) => k === state.tab)) state.tab = 'money';
+  const g = G();
+  if (!tabList().includes(state.tab)) state.tab = 'money';
   tabsEl.hidden = false;
-  tabsEl.innerHTML = tabs.map(([k, l]) => `<button class="tab" role="tab" data-tab="${k}" aria-selected="${state.tab === k}">${l}</button>`).join('');
+  tabsEl.innerHTML = tabList().map((k) => `<button class="tab" role="tab" data-tab="${k}" aria-selected="${state.tab === k}">${TABS[k]}</button>`).join('');
   topRight.innerHTML = `
+    <button class="btn btn-ghost btn-sm search-btn" id="open-search" aria-label="Search items (Ctrl+K)">${svg.search}<span>Search items</span><span class="kbd">Ctrl K</span></button>
     <div class="char-chip">
       <div class="who"><b>${esc(s.header.name)}</b><span>${state.explorer ? 'Explorer mode' : `Total level ${fmtNum(s.header.totalLevel)}`}</span></div>
       <button class="btn btn-sm" id="reimport">${state.explorer ? 'Import save' : 'New save'}</button>
     </div>`;
   $('#reimport').onclick = () => { localStorage.removeItem(STORE_KEY); state.save = null; history.replaceState(null, '', location.pathname); renderLanding(); };
+  $('#open-search').onclick = () => openPalette();
 
-  const best = e.ranked('chain')[0];
+  const best = e.ranked(state.explorer ? 'chain' : 'best')[0];
   const bv = e.bankValue();
-  const unlocked = e.unlockedMethods().length;
   const ago = s.header.timestamp ? relTime(s.header.timestamp) : '';
-  const skillsShown = Object.entries(s.skills)
-    .filter(([k]) => g.skills[k])
-    .sort((a, b) => order(a[0]) - order(b[0]));
+  const skillsShown = Object.entries(s.skills).filter(([k]) => g.skills[k] && SKILL_ORDER.includes(k)).sort((a, b) => order(a[0]) - order(b[0]));
+  const others = Object.entries(s.skills).filter(([k]) => g.skills[k] && !SKILL_ORDER.includes(k) && k !== 'Combat');
+  const adv = state.explorer ? null : e.upgradeAdvice().find((a) => a.dGp > 0 && !a.gap);
+  const hist = state.history;
+  const prev = hist?.prev;
+  const delta = prev ? {
+    gp: hist.cur.gp - prev.gp, bank: hist.cur.bank - prev.bank, tl: (hist.cur.tl ?? 0) - (prev.tl ?? 0),
+    xp: Object.entries(hist.cur.xp).reduce((a, [k, v]) => a + Math.max(0, v - (prev.xp[k] ?? v)), 0),
+  } : null;
+  const lvlDelta = (k) => {
+    if (!prev?.xp?.[k] && prev?.xp?.[k] !== 0) return 0;
+    return s.skills[k].level - levelFromXp(prev.xp[k]);
+  };
 
   app.innerHTML = `
   <section class="profile fade-in">
@@ -201,59 +259,83 @@ function renderDashboard() {
       <h1 class="profile-name">${esc(s.header.name)}</h1>
       <div class="profile-meta">
         <span class="pill">${esc(s.header.gamemode || 'Standard')}</span>
-        ${state.explorer ? '<span class="pill gold">All skills 99 · all shop upgrades</span>' : `<span class="pill">Saved ${esc(ago)}</span><span class="pill">${s.header.activeAction ? `Last doing ${esc(s.header.activeAction)}` : 'Idle'}</span>`}
+        ${state.explorer ? '<span class="pill gold">All skills 99 · every shop upgrade</span>' : `<span class="pill">Saved ${esc(ago)}</span>`}
+        ${delta ? `<span class="pill green" title="Compared with your previous import (${esc(relTime(prev.t))})">${svg.up} Since ${esc(relTime(prev.t))}: ${delta.tl > 0 ? `+${delta.tl} levels · ` : ''}${fmtGp(delta.xp)} xp · ${fmtGp(delta.gp + delta.bank, { sign: true })} worth</span>` : ''}
       </div>
     </div>
     <div class="stats stagger">
-      <div class="panel stat hero"><div class="label">${img(g.skills[best?.m.s]?.i || g.currencies.GoldPieces, '', 16)}Best right now</div><div class="value num" data-count="${best ? Math.round(best.gph) : 0}">${best ? fmtGp(best.gph) : '—'}</div><div class="sub">${best ? `gp/hr · ${esc(best.m.n)}` : 'nothing unlocked yet'}</div></div>
+      <button class="panel stat hero" data-go="money"><div class="label">${img(skillIcon(best?.m.s) || g.currencies.GoldPieces, '', 16)}Best right now</div><div class="value num" data-count="${best ? Math.round(best.gph) : 0}">${best ? fmtGp(best.gph) : '—'}</div><div class="sub">${best ? `gp/hr · ${esc(best.m.n)}` : 'nothing unlocked yet'}</div></button>
       ${state.explorer ? explorerTiles() : `
       <div class="panel stat"><div class="label">${img(g.currencies.GoldPieces, '', 16)}Gold</div><div class="value num" data-count="${s.wallet?.GoldPieces ?? s.header.gp ?? 0}">${fmtGp(s.wallet?.GoldPieces ?? s.header.gp ?? 0)}</div><div class="sub">in your wallet</div></div>
-      <div class="panel stat"><div class="label">${img(g.skills.Bank?.i, '', 16)}Bank value</div><div class="value num" data-count="${Math.round(bv.total)}">${fmtGp(bv.total)}</div><div class="sub">${fmtNum(bv.rows.length)} stacks if sold now</div></div>`}
-      <div class="panel stat"><div class="label">${img(g.skills.CompletionLog?.i || g.skills.Quests?.i, '', 16)}Methods unlocked</div><div class="value num">${fmtNum(unlocked)}<span class="muted of"> / ${fmtNum(g.methods.length)}</span></div><div class="sub">across ${SKILL_ORDER.length} skills</div></div>
+      <button class="panel stat" data-go="bank"><div class="label">${img(g.skills.Bank?.i, '', 16)}Bank value</div><div class="value num" data-count="${Math.round(bv.total)}">${fmtGp(bv.total)}</div><div class="sub">${fmtNum(bv.rows.length)} stacks if sold now</div></button>
+      <button class="panel stat" data-go="upgrades"><div class="label">${img(g.skills._Shop?.i, '', 16)}Next upgrade</div>${adv ? `<div class="value small">${esc(adv.s.n)}</div><div class="sub">+${fmtGp(adv.dGp)} gp/hr · pays back in ${fmtDuration(adv.payback)}</div>` : `<div class="value small">All caught up</div><div class="sub">No profitable upgrade in reach</div>`}</button>`}
     </div>
   </section>
   <div class="skills-strip">
     ${skillsShown.map(([k, v]) => {
       const lo = xpForLevel(v.level), hi = xpForLevel(v.level + 1);
       const pct = v.level >= 99 ? 100 : Math.max(0, Math.min(100, ((v.xp - lo) / (hi - lo)) * 100));
-      return `<div class="skill-chip" title="${esc(k)} · ${fmtNum(v.xp)} xp">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}</div><div class="nm">${esc(k)}</div></div><span class="bar" style="width:${pct}%"></span></div>`;
+      const d = lvlDelta(k);
+      if (k === 'Farming') return `<span class="skill-chip" title="${esc(k)} · ${fmtNum(v.xp)} xp">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}${d > 0 ? `<em class="up">+${d}</em>` : ''}</div><div class="nm">${esc(k)}</div></div><span class="bar" style="width:${pct}%"></span></span>`;
+      return `<button class="skill-chip" data-train="${esc(k)}" title="${esc(k)} · ${fmtNum(v.xp)} xp · open in Training">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}${d > 0 ? `<em class="up">+${d}</em>` : ''}</div><div class="nm">${esc(k)}</div></div><span class="bar" style="width:${pct}%"></span></button>`;
     }).join('')}
+    ${others.length ? `<span class="strip-sep"></span>` + others.map(([k, v]) => `<span class="skill-chip dim" title="${esc(k)} · not modelled yet">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}</div><div class="nm">${esc(k)}</div></div></span>`).join('') : ''}
   </div>
   <div id="view"></div>`;
 
-  countUp();
+  countUp(app);
   tabsEl.onclick = (ev) => {
     const b = ev.target.closest('[data-tab]');
     if (!b) return;
-    state.tab = b.dataset.tab; savePrefs();
-    tabsEl.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', t.dataset.tab === state.tab));
-    renderView();
+    go(b.dataset.tab);
   };
+  app.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => go(b.dataset.go)));
+  app.querySelectorAll('[data-train]').forEach((b) => (b.onclick = () => { state.trainSkill = b.dataset.train; state.trainTarget = null; state.trainLevel = null; go('train'); }));
   renderView();
 }
 
+function go(tab) {
+  state.tab = tab; savePrefs();
+  tabsEl.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', t.dataset.tab === state.tab));
+  renderView();
+  const v = $('#view');
+  if (v && v.getBoundingClientRect().top < 0) v.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function explorerTiles() {
-  const e = state.engine, g = state.game;
+  const e = E(), g = G();
   const va = e.ranked('sell')[0];
   const gather = e.ranked('chain').find((x) => !x.m.in.length);
-  const tile = (x, label) => `<div class="panel stat"><div class="label">${img(g.skills[x?.m.s]?.i, '', 16)}${label}</div><div class="value num" data-count="${x ? Math.round(x.gph) : 0}">${x ? fmtGp(x.gph) : '—'}</div><div class="sub">${x ? `gp/hr · ${esc(x.m.n)}` : ''}</div></div>`;
-  return tile(va, 'Best value added') + tile(gather, 'Best gathering');
+  const tile = (x, label) => `<div class="panel stat"><div class="label">${img(skillIcon(x?.m.s), '', 16)}${label}</div><div class="value num" data-count="${x ? Math.round(x.gph) : 0}">${x ? fmtGp(x.gph) : '—'}</div><div class="sub">${x ? `gp/hr · ${esc(x.m.n)}` : ''}</div></div>`;
+  const unlocked = e.unlockedMethods().length;
+  return tile(va, 'Best value added') + tile(gather, 'Best gathering') + `<div class="panel stat"><div class="label">${img(g.skills.CompletionLog?.i, '', 16)}Methods</div><div class="value num">${fmtNum(unlocked)}</div><div class="sub">across ${SKILL_ORDER.length} skills</div></div>`;
 }
 
 function renderView() {
   const v = $('#view');
   if (!v) return;
-  if (state.tab === 'money') v.innerHTML = viewMoney();
-  else if (state.tab === 'alchemy') v.innerHTML = viewAlchemy();
-  else if (state.tab === 'bank') v.innerHTML = viewBank();
-  else v.innerHTML = state.explorer ? viewAll() : viewUpcoming();
+  setHash();
+  const views = { money: viewMoney, train: viewTrain, upgrades: viewUpgrades, bank: viewBank, unlocks: viewUnlocks };
+  v.innerHTML = `<div class="view fade-in">${(views[state.tab] || viewMoney)()}</div>`;
   bindView(v);
+}
+
+function modsToggle() {
+  if (state.explorer) return '';
+  const count = countSources();
+  return `<label class="toggle mods-toggle" title="Apply the bonuses from your shop upgrades and equipped tools"><input type="checkbox" id="mods" ${state.mods ? 'checked' : ''}/><span>Your upgrades <b class="num">${count}</b></span></label>`;
+}
+function countSources() {
+  const s = state.save; let n = 0;
+  for (const [id, c] of Object.entries(s.shop || {})) if (c > 0 && G().shop[id]?.b) n++;
+  for (const id of Object.keys(s.tools || {})) if (G().items[id]?.tb) n++;
+  return n;
 }
 
 // ---------------------------------------------------------------- money makers
 function rowsForMoney() {
-  const e = state.engine;
-  let rows = e.ranked(state.mode, { includePassive: state.passive, sortTotal: state.mode === 'bank' && state.bankSortTotal });
+  const e = E();
+  let rows = e.ranked(state.mode, { includePassive: state.passive, sortTotal: state.mode === 'bank' && state.bankSortTotal, window: state.mode === 'afk' ? state.window : 0 });
   if (state.skill) rows = rows.filter((x) => x.m.s === state.skill);
   if (state.q) {
     const q = state.q.toLowerCase();
@@ -263,65 +345,77 @@ function rowsForMoney() {
 }
 
 function viewMoney() {
-  const e = state.engine;
-  const g = state.game;
-  if (state.explorer && state.mode === 'bank') state.mode = 'chain';
-  const all = rowsForMoney();
-  const rows = all.filter((x) => x.gph > 0 || state.mode === 'bank');
+  const e = E();
+  if (state.explorer && (state.mode === 'bank' || state.mode === 'best')) state.mode = 'chain';
+  const afk = state.mode === 'afk';
+  const rows = rowsForMoney().filter((x) => (afk ? x.total > 0 : x.gph > 0) || state.mode === 'bank');
   const top = rows[0];
-  const max = Math.max(1, ...rows.slice(0, 50).map((x) => x.gph));
-  const skills = SKILL_ORDER.filter((s) => e.ranked(state.mode, { includePassive: true }).some((x) => x.m.s === s));
-  const modes = Object.entries(MODES).filter(([k]) => !(state.explorer && k === 'bank'));
+  const max = Math.max(1, ...rows.slice(0, 50).map((x) => (afk ? x.total : x.gph)));
+  const all = e.ranked(state.mode, { includePassive: true });
+  const skills = SKILL_ORDER.filter((s) => all.some((x) => x.m.s === s));
+  const modes = Object.entries(MODES).filter(([k]) => !(state.explorer && (k === 'bank' || k === 'best')));
+  const bankCount = state.mode === 'best' ? rows.filter((x) => x.src === 'bank').length : 0;
 
   return `
-  <div class="section-head"><div><h2>Money makers</h2><p>${esc(MODES[state.mode].desc)}. Base rates, before your tool and mastery bonuses.</p></div></div>
+  <div class="section-head">
+    <div><h2>Money makers</h2><p>Ranked by gold per hour for ${state.explorer ? 'a maxed account' : 'your levels, upgrades and bank'}.${state.mode === 'best' && bankCount ? ` <span class="gold">${bankCount}</span> of them run on items already in your bank.` : ''} Open any row for the full breakdown; click an item icon to look it up.</p></div>
+    ${modsToggle()}
+  </div>
   <div class="controls">
-    <div class="mode-switch" role="group" aria-label="Pricing mode" style="grid-template-columns:repeat(${modes.length},minmax(0,1fr))">
-      ${modes.map(([k, m]) => `<button class="mode" data-mode="${k}" aria-pressed="${state.mode === k}"><b><span class="dot"></span>${m.label}</b><span>${m.desc}</span></button>`).join('')}
+    <div class="mode-switch" role="tablist" aria-label="Pricing" style="--n:${modes.length}">
+      ${modes.map(([k, m]) => `<button class="mode" role="tab" data-mode="${k}" aria-selected="${state.mode === k}"><b><span class="dot"></span>${m.label}</b><span>${m.desc}</span></button>`).join('')}
     </div>
     <div class="filter-row">
       <div class="chips" role="group" aria-label="Filter by skill">
         <button class="chip all" data-skill="" aria-pressed="${!state.skill}">All skills</button>
-        ${skills.map((s) => `<button class="chip" data-skill="${s}" aria-pressed="${state.skill === s}">${img(g.skills[s]?.i, '', 18)}${s}</button>`).join('')}
+        ${skills.map((s) => `<button class="chip" data-skill="${s}" aria-pressed="${state.skill === s}">${img(skillIcon(s), '', 18)}${s}</button>`).join('')}
       </div>
       ${state.mode === 'bank' ? `<div class="seg" role="group" aria-label="Sort"><button data-banksort="1" aria-pressed="${state.bankSortTotal}">Most total profit</button><button data-banksort="0" aria-pressed="${!state.bankSortTotal}">Fastest gp/hr</button></div>` : ''}
+      ${afk ? `<div class="seg" role="group" aria-label="Time away">${[1, 4, 8, 12, 24].map((h) => `<button data-window="${h}" aria-pressed="${state.window === h}">${h}h</button>`).join('')}</div>` : ''}
       ${state.mode === 'sell' ? `<label class="toggle"><input type="checkbox" id="passive" ${state.passive ? 'checked' : ''}/>Farming plots</label>` : ''}
       <div class="search">${svg.search}<input id="q" type="search" placeholder="Search item or method" value="${esc(state.q)}" aria-label="Search methods"/></div>
     </div>
   </div>
-  ${state.mode === 'bank' && !rows.length ? '' : ''}
   ${top ? topPick(top) : ''}
   <div class="list" id="list">
-    ${rows.length ? rows.slice(0, state.limit).map((x, i) => methodRow(x, i, max)).join('') : emptyState()}
+    ${rows.length ? rows.slice(0, state.limit).map((x, i) => methodRow(x, i, max)).join('') : emptyMoney()}
   </div>
   ${rows.length > state.limit ? `<button class="btn more-btn" id="more">Show ${Math.min(30, rows.length - state.limit)} more <span class="muted">· ${rows.length - state.limit} left</span></button>` : ''}`;
 }
 
-function emptyState() {
+function emptyMoney() {
+  if (state.q || state.skill) return `<div class="empty"><b>No matches.</b>Try a different skill or clear the search.</div>`;
   if (state.mode === 'bank') return `<div class="empty"><b>Nothing in your bank can be processed for profit right now.</b>Try <button class="linkish" data-mode="chain">From scratch</button> to see what to gather.</div>`;
-  return `<div class="empty"><b>No matches.</b>Try a different skill or clear the search.</div>`;
+  return `<div class="empty"><b>Nothing profitable is unlocked yet.</b>Check <button class="linkish" data-gotab="unlocks">Next unlocks</button> for what opens up soon.</div>`;
+}
+
+function srcTag(x) {
+  if (x.src === 'bank' && state.mode !== 'bank') return `<span class="tag green" title="Uses items already in your bank">From bank · ${fmtDuration(x.bank.hours)}</span>`;
+  if (state.mode === 'best' && x.src === 'chain') return `<span class="tag">${x.m.in.length ? 'From scratch' : 'Gathering'}</span>`;
+  return '';
 }
 
 function topPick(x) {
-  const e = state.engine;
   const m = x.m;
-  const out = m.out[0]?.[0];
+  const afk = state.mode === 'afk';
+  const kicker = state.mode === 'bank' ? 'Best use of your bank' : state.mode === 'sell' ? 'Best value added' : afk ? `Best to leave running for ${state.window}h` : 'Your best money maker';
   return `
-  <div class="panel toppick fade-in">
-    <div class="art">${img(m.i || e.items[out]?.i, m.n, 60)}</div>
+  <div class="panel toppick fade-in" data-open-row="${esc(m.id)}">
+    <div class="art">${img(methodIcon(m), m.n, 60)}</div>
     <div>
-      <div class="kicker">${state.mode === 'bank' ? 'Best use of your bank' : 'Your best money maker'}</div>
+      <div class="kicker">${kicker}</div>
       <h3>${esc(m.n)}</h3>
       <div class="meta">
-        <span class="pill">${img(state.game.skills[m.s]?.i, '', 16)}${m.s} ${m.lv > 1 ? `· lvl ${m.lv}` : ''}</span>
+        <span class="pill">${img(skillIcon(m.s), '', 16)}${m.s} ${m.lv > 1 ? `· lvl ${m.lv}` : ''}</span>
         ${m.loc ? `<span class="pill">${esc(m.loc)}</span>` : ''}
         ${x.r.succ < 1 ? `<span class="pill warn">${Math.round(x.r.succ * 100)}% success</span>` : ''}
-        ${x.bank ? `<span class="pill green">Your stock lasts ${fmtDuration(x.bank.hours)} · ${fmtGp(x.bank.total, { sign: true })} total</span>` : ''}
-        ${x.chain && x.chain.steps.length ? `<span class="pill">${chainSummary(x.chain)}</span>` : ''}
+        ${x.bank && !afk ? `<span class="pill green">Your stock lasts ${fmtDuration(x.bank.hours)} · ${fmtGp(x.bank.total, { sign: true })} total</span>` : ''}
+        ${afk ? `<span class="pill">${fmtGp(x.gph)} gp/hr</span>` : ''}
+        ${x.src === 'chain' && x.chain.steps.length ? `<span class="pill">${chainSummary(x.chain)}</span>` : ''}
         <span class="pill">${fmtNum(x.xph)} xp/hr</span>
       </div>
     </div>
-    <div class="big"><div class="v num">${fmtGp(x.gph)}</div><div class="u">gold per hour</div></div>
+    <div class="big"><div class="v num">${fmtGp(afk ? x.total : x.gph)}</div><div class="u">${afk ? `gold over ${state.window}h${x.hours < state.window ? ` · stock lasts ${fmtDuration(x.hours)}` : ''}` : 'gold per hour'}</div></div>
   </div>`;
 }
 
@@ -334,32 +428,36 @@ function chainSummary(c) {
   return parts.join(' · ');
 }
 
+const tok = (it, size = 24) => `<span class="tok" title="${esc(E().name(it))}" data-item="${esc(it)}">${img(itemIcon(it), E().name(it), size)}</span>`;
+
 function methodRow(x, i, max) {
-  const e = state.engine;
+  const e = E();
   const m = x.m;
   const id = m.id;
   const open = state.open.has(id);
   const ins = m.in.slice(0, 3);
-  const outs = m.out.slice().sort((a, b) => b[1] * e.value(b[0]) - a[1] * e.value(a[0])).slice(0, 3);
-  const tok = (it) => `<span class="tok" title="${esc(e.name(it))}">${img(e.items[it]?.i, e.name(it), 24)}</span>`;
-  const flow = `${ins.map(([it]) => tok(it)).join('')}${m.in.length > 3 ? `<span class="more">+${m.in.length - 3}</span>` : ''}${m.in.length ? `<span class="arrow">${svg.arrow}</span>` : ''}${m.gp > 0 ? `<span class="tok gp" title="Gold">${img(state.game.currencies.GoldPieces, 'Gold', 22)}</span>` : ''}${outs.map(([it]) => tok(it)).join('')}${m.out.length > 3 ? `<span class="more">+${m.out.length - 3}</span>` : ''}`;
+  const outs = x.r.outs.slice().sort((a, b) => b[1] * e.value(b[0]) - a[1] * e.value(a[0])).slice(0, 3);
+  const flow = `${ins.map(([it]) => tok(it)).join('')}${m.in.length > 3 ? `<span class="more">+${m.in.length - 3}</span>` : ''}${m.in.length ? `<span class="arrow">${svg.arrow}</span>` : ''}${x.r.gp > 0 ? `<span class="tok gp" title="Gold">${img(G().currencies.GoldPieces, 'Gold', 22)}</span>` : ''}${outs.map(([it]) => tok(it)).join('')}${x.r.outs.length > 3 ? `<span class="more">+${x.r.outs.length - 3}</span>` : ''}`;
   const sub = [
-    `${img(state.game.skills[m.s]?.i, '', 15)}${m.s}`,
+    `${img(skillIcon(m.s), '', 15)}${m.s}`,
     m.lv > 1 ? `lvl ${m.lv}` : '',
     m.loc ? esc(m.loc) : '',
     x.r.succ < 1 ? `${Math.round(x.r.succ * 100)}% success` : '',
-    x.bank ? `lasts ${fmtDuration(x.bank.hours)}` : '',
+    state.mode === 'bank' ? `lasts ${fmtDuration(x.bank.hours)}` : '',
+    state.mode === 'afk' && x.hours < state.window ? `<span class="warn-t">stock runs out after ${fmtDuration(x.hours)}</span>` : '',
+    state.mode === 'afk' && x.shopOnly ? 'buys its inputs' : '',
     m.k === 'passive' ? 'per plot' : '',
   ].filter(Boolean).join('<span class="sep">·</span>');
-  const pct = Math.max(2, Math.min(100, (x.gph / max) * 100));
+  const afk = state.mode === 'afk';
+  const pct = Math.max(2, Math.min(100, ((afk ? x.total : x.gph) / max) * 100));
   return `
   <div class="row ${open ? 'open' : ''}" data-id="${esc(id)}">
     <button class="row-main" aria-expanded="${open}" data-toggle="${esc(id)}">
       <span class="rank num">${i + 1}</span>
-      <span class="ico">${img(m.i || e.items[m.out[0]?.[0]]?.i, '', 34)}</span>
-      <span class="title"><b>${esc(m.n)}</b><span class="sub">${sub}</span></span>
+      <span class="ico">${img(methodIcon(m), '', 34)}</span>
+      <span class="title"><b>${esc(m.n)} ${srcTag(x)}</b><span class="sub">${sub}</span></span>
       <span class="flow">${flow}</span>
-      <span class="gph"><span class="v num ${x.gph < 0 ? 'neg' : ''}">${fmtGp(x.gph)}</span> <span class="u">gp/hr</span>${x.bank ? `<div class="u">${fmtGp(x.bank.total, { sign: true })} total</div>` : `<div class="meter"><i style="width:${pct}%"></i></div>`}</span>
+      <span class="gph"><span class="v num ${x.gph < 0 ? 'neg' : ''}">${fmtGp(afk ? x.total : x.gph)}</span> <span class="u">${afk ? `in ${state.window}h` : 'gp/hr'}</span>${x.bank && state.mode === 'bank' ? `<div class="u">${fmtGp(x.bank.total, { sign: true })} total</div>` : `<div class="meter"><i style="width:${pct}%"></i></div>`}</span>
       <span class="xph num">${fmtGp(x.xph)}<small>xp/hr</small></span>
       <span class="chev">${svg.chev}</span>
     </button>
@@ -367,18 +465,34 @@ function methodRow(x, i, max) {
   </div>`;
 }
 
+function upgradesFact(m, r) {
+  if (state.explorer || !state.mods) return '';
+  const srcs = E().modSources(m);
+  if (!srcs.length) return '';
+  const b = state.base.rate(m);
+  const speed = b.ms / r.ms - 1;
+  const outGain = b.outValue > 0 ? r.outValue / b.outValue - 1 : 0;
+  const xpGain = b.xp > 0 ? r.xp / b.xp - 1 : 0;
+  const parts = [];
+  if (Math.abs(speed) > 0.005) parts.push(`${speed > 0 ? '+' : ''}${fmtPct(speed)} speed`);
+  if (Math.abs(outGain) > 0.005) parts.push(`${outGain > 0 ? '+' : ''}${fmtPct(outGain)} output value`);
+  if (Math.abs(xpGain) > 0.005) parts.push(`${xpGain > 0 ? '+' : ''}${fmtPct(xpGain)} xp`);
+  return `<div class="fact wide"><div class="k">Your upgrades on this ${parts.length ? `<span class="gain">${parts.join(' · ')}</span>` : ''}</div>
+    <div class="srcs">${srcs.map(({ src, fx }) => `<span class="src" title="${esc(fx.map((f) => { const t = bonusText([null, f.name, f.v, {}]); return `${t.val} ${t.label}`; }).join(', '))}">${img(src.i || itemIcon(src.id), '', 18)}${esc(src.n)}</span>`).join('')}</div></div>`;
+}
+
 function details(x) {
-  const e = state.engine;
+  const e = E();
   const m = x.m;
   const r = x.r;
   const line = (cls, it, q, sign, price = e.value(it), note = '') => {
     const val = q * price;
-    return `<tr class="${cls}"><td class="it"><span>${img(e.items[it]?.i, '', 22)}<span>${esc(e.name(it))}${note ? ` <span class="muted">${note}</span>` : ''}</span></span></td><td class="q num">${fmtNum(q, q < 10 ? 2 : 0)}</td><td class="g num">${val > 0.5 ? sign + fmtGp(val) : '—'}</td></tr>`;
+    return `<tr class="${cls}"><td class="it"><span data-item="${esc(it)}">${img(itemIcon(it), '', 22)}<span>${esc(e.name(it))}${note ? ` <span class="muted">${note}</span>` : ''}</span></span></td><td class="q num">${fmtNum(q, q < 10 ? 2 : 0)}</td><td class="g num">${val > 0.5 ? sign + fmtGp(val) : '—'}</td></tr>`;
   };
-  const gpLine = (gp) => (gp > 0.5 ? `<tr class="out"><td class="it"><span>${img(state.game.currencies.GoldPieces, '', 22)}<span>Gold coins</span></span></td><td class="q num"></td><td class="g num">+${fmtGp(gp)}</td></tr>` : '');
+  const gpLine = (gp) => (gp > 0.5 ? `<tr class="out"><td class="it"><span>${img(G().currencies.GoldPieces, '', 22)}<span>Gold coins</span></span></td><td class="q num"></td><td class="g num">+${fmtGp(gp)}</td></tr>` : '');
   const byValue = (a, b) => b[1] * e.value(b[0]) - a[1] * e.value(a[0]);
   let outRows, costRows, caption, split = '';
-  const chained = x.chain && x.chain.steps.length;
+  const chained = x.src === 'chain' && x.chain && x.chain.steps.length;
   if (chained) {
     const bd = e.chainBreakdown(m, x.chain);
     caption = 'Per hour of play, whole chain';
@@ -388,7 +502,7 @@ function details(x) {
     const hues = [42, 150, 205, 265, 12, 320, 95];
     split = `<div class="fact wide"><div class="k">Where your hour goes</div>
       <div class="split-bar">${bd.split.map((s, i) => `<i style="flex:${s.ms};--h:${hues[i % hues.length]}" title="${esc(s.m.s)}: ${esc(s.m.n)} · ${fmtMs(s.ms)}"></i>`).join('')}</div>
-      <div class="split-legend">${bd.split.map((s, i) => `<span><b style="--h:${hues[i % hues.length]}"></b>${img(state.game.skills[s.m.s]?.i, '', 16)}${esc(s.m.n)} <span class="muted num">${Math.round((s.ms / total) * 60)}m</span></span>`).join('')}</div></div>`;
+      <div class="split-legend">${bd.split.map((s, i) => `<span><b style="--h:${hues[i % hues.length]}"></b>${img(skillIcon(s.m.s), '', 16)}${esc(s.m.n)} <span class="muted num">${Math.round((s.ms / total) * 60)}m</span></span>`).join('')}</div></div>`;
   } else {
     caption = 'Per hour';
     outRows = r.outs.filter(([, q]) => q > 1e-6).sort(byValue).map(([it, q]) => line('out', it, q, '+')).join('') + gpLine(r.gp);
@@ -402,8 +516,7 @@ function details(x) {
       return line('in', it, q, '−');
     }).join('');
   }
-  const share = x.chain ? x.chain.share : 1;
-  const totalLabel = 'Net gold per hour';
+  const share = x.src === 'chain' && x.chain ? x.chain.share : 1;
 
   const st = e.status(m);
   const reqs = m.r.map((q) => {
@@ -411,26 +524,34 @@ function details(x) {
     const cls = !s.known ? 'warn' : s.ok ? 'green' : 'red';
     return `<span class="pill ${cls}">${s.known ? (s.ok ? svg.check : svg.lock) : svg.q}${esc(s.text)}</span>`;
   }).join('');
-
-  const chainLinks = x.chain && x.chain.steps.some((s) => s.via.kind === 'make')
+  const chainLinks = x.src === 'chain' && x.chain && x.chain.steps.some((s) => s.via.kind === 'make')
     ? `<div class="fact wide"><div class="k">Production chain</div><div class="chain">${chainTree(x.chain)}</div></div>` : '';
+  const compare = state.mode === 'best' && (x.bankAlt || (x.src === 'bank' && x.chain))
+    ? `<div class="fact wide"><div class="k">Both ways</div><div class="v both">
+        <span>From scratch <b class="num">${fmtGp(x.src === 'bank' ? x.chain.gpPerHour : x.gph)}</b>/hr</span>
+        <span>From your bank <b class="num green">${fmtGp(x.src === 'bank' ? x.gph : x.bankAlt.gpPerHour)}</b>/hr for ${fmtDuration((x.src === 'bank' ? x.bank : x.bankAlt).hours)}</span></div></div>` : '';
+  const ex = r.extra || {};
+  const timeNote = m.x?.t === 'herb' ? `${fmtMs(ex.batch)} per brew of ${ex.bottles}` : m.x?.t === 'wc' ? `${fmtNum(ex.hits, 1)} swings` : m.x?.t === 'mine' ? `~${fmtNum(ex.hits, 1)} swings` : m.x?.t === 'art' && ex.steps > 1 ? `${fmtNum(ex.stepsTaken, 1)} of ${ex.steps} steps` : (m.note || '');
 
   return `<div class="content">
     <table class="ledger">
       <caption>${caption}</caption>
       <thead><tr><th>Item</th><th class="q">Qty</th><th class="g">Value</th></tr></thead>
       <tbody>${outRows}${costRows}
-      <tr class="total"><td colspan="2">${totalLabel}</td><td class="g num">${fmtGp(x.gph, { sign: true })}</td></tr></tbody>
+      <tr class="total"><td colspan="2">Net gold per hour</td><td class="g num">${fmtGp(x.gph, { sign: true })}</td></tr></tbody>
     </table>
     <div class="facts">
-      <div class="fact"><div class="k">Time per action</div><div class="v num">${fmtMs(r.ms)}${m.note ? ` <span class="muted" style="font-weight:400">· ${esc(m.note)}</span>` : ''}</div></div>
+      <div class="fact"><div class="k">Time per action</div><div class="v num">${fmtMs(r.ms)}${timeNote ? ` <span class="muted" style="font-weight:400">· ${esc(timeNote)}</span>` : ''}</div></div>
       <div class="fact"><div class="k">Actions / hour</div><div class="v num">${fmtNum(r.aph, 1)}</div></div>
       <div class="fact"><div class="k">${esc(m.s)} XP / hour</div><div class="v num">${fmtNum(r.xp * share)}</div></div>
       ${r.succ < 1 ? `<div class="fact"><div class="k">Success chance</div><div class="v num">${(r.succ * 100).toFixed(1)}%</div></div>`
+        : ex.preserve > 0 ? `<div class="fact"><div class="k">Ingredients kept</div><div class="v num">${fmtPct(ex.preserve, 1)}</div></div>`
         : chained ? `<div class="fact"><div class="k">Made per hour of play</div><div class="v num">${fmtNum((r.outs.find(([it]) => it === m.primary)?.[1] ?? 0) * share, 1)}</div></div>`
         : `<div class="fact"><div class="k">Gross value / hour</div><div class="v num">${fmtGp(r.outValue)}</div></div>`}
-      ${x.bank ? `<div class="fact wide"><div class="k">Your bank</div><div class="v">Runs for <b class="gold">${fmtDuration(x.bank.hours)}</b>, ${fmtGp(x.bank.total, { sign: true })} profit total. Limited by ${x.bank.limiting.map((it) => esc(e.name(it))).join(', ')}.</div></div>` : ''}
-      ${m.succ?.t === 'thieving' ? `<div class="fact wide"><div class="k">Heads up</div><div class="v" style="font-weight:400">A failed attempt stuns you for 2s and hits for up to ${m.dmg} HP, so bring food. ${m.stages > 1 ? `Takes ${m.stages} stages to finish.` : ''}</div></div>` : ''}
+      ${compare}
+      ${x.bank && !compare ? `<div class="fact wide"><div class="k">Your bank</div><div class="v">Runs for <b class="gold">${fmtDuration(x.bank.hours)}</b>, ${fmtGp(x.bank.total, { sign: true })} profit total. Limited by ${x.bank.limiting.map((it) => esc(e.name(it))).join(', ')}.</div></div>` : ''}
+      ${m.x?.t === 'thv' ? `<div class="fact wide"><div class="k">Heads up</div><div class="v" style="font-weight:400">A failed attempt stuns you for ${fmtMs(ex.stun || 2000)} and hits for up to ${m.dmg} HP, so bring food. ${ex.stages > 1 ? `Takes ${ex.stages} stages to finish.` : ''}</div></div>` : ''}
+      ${upgradesFact(m, r)}
       ${split}
       ${chainLinks}
       <div class="fact wide"><div class="k">Requirements</div><div class="reqs">${reqs || '<span class="muted">None</span>'}</div>${st.unverified.length ? '<div class="muted" style="font-size:12px;margin-top:6px">Amber requirements cannot be read from the save yet, so they are assumed met.</div>' : ''}</div>
@@ -439,8 +560,8 @@ function details(x) {
 }
 
 function chainTree(chain) {
-  const e = state.engine;
-  const costs = e.solveChains(e.unlockedMethods()).costs;
+  const e = E();
+  const costs = e.solveChains().costs;
   const seen = new Set();
   const lines = [];
   const walk = (item, depth) => {
@@ -449,40 +570,192 @@ function chainTree(chain) {
     const c = costs.get(item);
     if (!c) return;
     const pad = `style="padding-left:${depth * 18}px"`;
-    if (c.via.kind === 'buy') { lines.push(`<div class="link" ${pad}>${img(e.items[item]?.i, '', 20)}${esc(e.name(item))} <span class="via">· buy for ${fmtGp(c.gp)} each</span></div>`); return; }
+    if (c.via.kind === 'buy') { lines.push(`<div class="link" ${pad} data-item="${esc(item)}">${img(itemIcon(item), '', 20)}${esc(e.name(item))} <span class="via">· buy for ${fmtGp(c.gp)} each</span></div>`); return; }
     const m = c.via.m;
-    lines.push(`<div class="link" ${pad}>${img(e.items[item]?.i, '', 20)}${esc(e.name(item))} <span class="via">· ${esc(m.s)}: ${esc(m.n)} · ${fmtMs(c.t)} each</span></div>`);
+    lines.push(`<div class="link" ${pad} data-item="${esc(item)}">${img(itemIcon(item), '', 20)}${esc(e.name(item))} <span class="via">· ${esc(m.s)}: ${esc(m.n)} · ${fmtMs(c.t)} each</span></div>`);
     for (const [it] of m.in) walk(it, depth + 1);
   };
   for (const s of chain.steps) walk(s.item, 0);
   return lines.join('');
 }
 
-// ---------------------------------------------------------------- alchemy
-function viewAlchemy() {
-  const e = state.engine;
-  const list = e.alchemy();
+// ---------------------------------------------------------------- training
+function viewTrain() {
+  const e = E(), g = G(), s = state.save;
+  const skills = SKILL_ORDER.filter((k) => k !== 'Farming' && e.methods.some((m) => m.s === k));
+  if (!skills.includes(state.trainSkill)) {
+    // default: the skill closest to its next level by time
+    state.trainSkill = skills.map((k) => ({ k, o: e.trainOptions(k)[0] })).filter((x) => x.o).sort((a, b) => {
+      const need = (k) => xpForLevel((s.skills[k]?.level ?? 1) + 1) - (s.skills[k]?.xp ?? 0);
+      return need(a.k) / a.o.xph - need(b.k) / b.o.xph;
+    })[0]?.k || skills[0];
+  }
+  const sk = state.trainSkill;
+  const cur = s.skills[sk] || { xp: 0, level: 1 };
+  const lo = xpForLevel(cur.level), hi = xpForLevel(cur.level + 1);
+  const pct = cur.level >= 99 ? 100 : ((cur.xp - lo) / (hi - lo)) * 100;
+  const target = Math.min(99, Math.max(cur.level + 1, state.trainTarget ?? Math.min(99, Math.ceil((cur.level + 1) / 5) * 5 + (cur.level % 5 === 4 ? 5 : 0))));
+  state.trainTarget = target;
+  const atLevel = state.trainLevel ?? cur.level;
+  const opts = e.trainOptions(sk, atLevel);
+  const plan = cur.level < 99 && !state.explorer ? e.planLevel(sk, target, { prefer: state.trainPrefer }) : null;
+  const maxH = plan ? Math.max(...plan.segs.map((x) => x.hours), 0.001) : 1;
+  const quick = [...new Set([cur.level + 1, Math.min(99, cur.level + 5), Math.min(99, cur.level + 10), 50, 70, 99].filter((l) => l > cur.level && l <= 99))].sort((a, b) => a - b).slice(0, 6);
+  const short = plan ? plan.supplies.filter((x) => x.qty >= 1).sort((a, b) => (b.qty - b.have) * e.value(b.item) - (a.qty - a.have) * e.value(a.item)) : [];
+
   return `
-  <div class="section-head"><div><h2>Bank alchemy</h2><p>For every stack in your bank: sell it now, or process it into something worth more first. Inputs you would use up are counted at their sell value, so the green number is pure extra profit.</p></div></div>
+  <div class="section-head"><div><h2>Training</h2><p>The fastest way to level each skill with what you have unlocked, including when to switch methods and the supplies you will burn through.</p></div>${modsToggle()}</div>
+  <div class="train">
+    <nav class="skill-pick" aria-label="Skill">
+      ${skills.map((k) => {
+        const v = s.skills[k] || { level: 1, xp: 0 };
+        const b = e.trainOptions(k)[0];
+        return `<button class="sp ${k === sk ? 'on' : ''}" data-tskill="${k}" aria-pressed="${k === sk}">${img(skillIcon(k), '', 26)}<span class="spn"><b>${k}</b><small>${b ? `${fmtGp(b.xph)} xp/hr` : 'nothing to train'}</small></span><span class="spl num">${v.level}</span></button>`;
+      }).join('')}
+    </nav>
+    <div class="train-main">
+      <div class="panel train-head">
+        <div class="th-skill">${img(skillIcon(sk), '', 52)}<div><h3>${sk}</h3><div class="muted">Level <b class="text">${cur.level}</b> · ${fmtNum(cur.xp)} xp${cur.level < 99 ? ` · ${fmtNum(hi - cur.xp)} to ${cur.level + 1}` : ''}</div></div>${guildBadge(sk)}</div>
+        <div class="xpbar"><i style="width:${pct}%"></i></div>
+        ${plan ? `
+        <div class="goal">
+          <span class="muted">Goal</span>
+          <div class="seg goal-seg">${quick.map((l) => `<button data-target="${l}" aria-pressed="${l === target}">${l}</button>`).join('')}</div>
+          <label class="lvl-in"><span class="sr">Target level</span><input type="number" min="${cur.level + 1}" max="99" value="${target}" id="target"/></label>
+          <div class="seg"><button data-prefer="xp" aria-pressed="${state.trainPrefer === 'xp'}">${svg.bolt} Fastest</button><button data-prefer="gp" aria-pressed="${state.trainPrefer === 'gp'}">${img(g.currencies.GoldPieces, '', 14)} Most gold</button></div>
+        </div>` : ''}
+      </div>
+      ${plan ? `
+      <div class="plan-sum stagger">
+        <div class="panel stat"><div class="label">${svg.clock}Time to ${target}</div><div class="value num">${Number.isFinite(plan.hours) ? fmtDuration(plan.hours) : '—'}</div><div class="sub">${fmtNum(xpForLevel(target) - cur.xp)} xp to go</div></div>
+        <div class="panel stat"><div class="label">${img(g.currencies.GoldPieces, '', 16)}Gold along the way</div><div class="value num ${plan.gp < 0 ? 'red' : 'gold'}">${fmtGp(plan.gp, { sign: true })}</div><div class="sub">${plan.gp < 0 ? 'cost of supplies, net of what you make' : 'from selling what you make'}</div></div>
+        <div class="panel stat"><div class="label">${svg.target}Methods</div><div class="value num">${plan.segs.length}</div><div class="sub">${plan.segs.length > 1 ? 'switch as new ones unlock' : 'one method all the way'}</div></div>
+      </div>
+      ${plan.stuck ? `<div class="note">${svg.info}<span>Nothing you can train is unlocked at level ${plan.stuck}. Check the requirements in Money makers.</span></div>` : ''}
+      <div class="panel plan">
+        <h4>Route</h4>
+        ${plan.segs.map((x) => `
+          <div class="seg-row">
+            <span class="ico">${img(methodIcon(x.m), '', 30)}</span>
+            <div class="title"><b>${esc(x.m.n)}</b><span class="sub">lvl ${x.fromLevel} → ${x.toLevel}<span class="sep">·</span>${fmtGp(x.xph)} xp/hr<span class="sep">·</span><span class="${x.gph < 0 ? 'red' : 'green'}">${fmtGp(x.gph, { sign: true })} gp/hr</span></span></div>
+            <div class="seg-bar"><i style="width:${Math.max(3, (x.hours / maxH) * 100)}%"></i></div>
+            <span class="seg-h num">${fmtDuration(x.hours)}</span>
+          </div>`).join('')}
+        ${short.length ? `<h4 style="margin-top:18px">Supplies</h4>
+        <div class="supplies">${short.slice(0, 12).map((x) => {
+          const miss = Math.max(0, x.qty - x.have);
+          return `<div class="sup" data-item="${esc(x.item)}">${img(itemIcon(x.item), '', 26)}<div><b>${esc(e.name(x.item))}</b><span class="num">${fmtNum(x.qty)} needed · you have ${fmtNum(x.have)}</span></div>${miss > 0 ? `<span class="pill red num">−${fmtGp(miss)}</span>` : `<span class="pill green">${svg.check}</span>`}</div>`;
+        }).join('')}</div>` : ''}
+      </div>` : ''}
+      <div class="section-sub">
+        <h4>Every way to train ${sk}</h4>
+        <label class="lvl-in inline">at level <input type="number" min="1" max="99" value="${atLevel}" id="atlevel"/></label>
+      </div>
+      <div class="tlist">
+        <div class="thead"><span></span><span>Method</span><span class="r">XP / hr</span><span class="r">Gold / hr</span><span class="r">Next level</span></div>
+        ${opts.slice(0, 40).map((o, i) => {
+          const need = atLevel < 99 ? xpForLevel(atLevel + 1) - (atLevel === cur.level ? cur.xp : xpForLevel(atLevel)) : 0;
+          return `<div class="trow ${i === 0 ? 'top' : ''}" data-item="${esc(o.m.primary || '')}">
+            <span class="ico">${img(methodIcon(o.m), '', 28)}</span>
+            <span class="title"><b>${esc(o.m.n)}</b><span class="sub">lvl ${o.m.lv}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
+            <span class="r num xpv">${fmtGp(o.xph)}</span>
+            <span class="r num ${o.gph < 0 ? 'red' : 'green'}">${fmtGp(o.gph, { sign: true })}</span>
+            <span class="r num muted">${atLevel < 99 ? fmtDuration(need / o.xph) : '—'}</span>
+          </div>`;
+        }).join('') || '<div class="empty"><b>Nothing to train at this level.</b></div>'}
+      </div>
+    </div>
+  </div>`;
+}
+
+function guildBadge(sk) {
+  const e = E();
+  const gs = e.guild?.[sk];
+  if (!gs || state.explorer) return '';
+  const nextNeed = gs.next ? gs.need(gs.next) : gs.total;
+  const prevNeed = gs.need(gs.rank);
+  const pct = gs.next ? Math.max(0, Math.min(100, ((gs.lo - prevNeed) / Math.max(1, nextNeed - prevNeed)) * 100)) : 100;
+  const bonuses = (G().guild[sk]?.bonuses || []).filter((b) => b.rank === gs.next).flatMap((b) => b.b.map((x) => bonusText(x, lookup)));
+  return `<div class="guild" title="${esc(`${fmtNum(gs.lo)} of ${fmtNum(gs.total)} guild points from tasks${gs.hi > gs.lo ? ` (up to ${fmtNum(gs.hi)} counting tasks the save can't confirm)` : ''}`)}">
+    <span class="k">Mastery guild</span>
+    <b>${esc(e.guildName(sk, gs.rank))}</b>
+    ${gs.next ? `<div class="gbar"><i style="width:${pct}%"></i></div><small>${fmtNum(nextNeed - gs.lo)} points to ${esc(e.guildName(sk, gs.next))}${bonuses.length ? ` · unlocks ${bonuses.map((t) => `${t.val} ${esc(t.label)}`).join(', ')}` : ''}</small>` : '<small>Top rank reached</small>'}
+  </div>`;
+}
+
+// ---------------------------------------------------------------- upgrades
+function viewUpgrades() {
+  const e = E(), g = G();
+  let list = e.upgradeAdvice();
+  const wallet = state.save.wallet?.GoldPieces ?? state.save.header.gp ?? 0;
+  if (state.upFilter === 'now') list = list.filter((a) => a.affordable && !a.gap);
+  if (state.upSort === 'gain') list = list.slice().sort((a, b) => b.dGp - a.dGp || b.dXp - a.dXp);
+  if (state.upSort === 'xp') list = list.slice().sort((a, b) => b.dXp - a.dXp);
+  const owned = e.sources;
+  const card = (a) => {
+    const fx = a.s.b.map((b) => bonusText(b, lookup));
+    const status = a.gap ? `<span class="pill warn">${svg.lock}Needs ${a.missing.map((m) => esc(m.text)).join(', ')}</span>`
+      : a.affordable ? `<span class="pill green">${svg.check}Can buy now</span>`
+      : `<span class="pill">Need ${[a.gpCost > wallet ? `${fmtGp(a.gpCost - wallet)} more gold` : '', ...a.s.ci.filter(([it, q]) => (e.bank[it] || 0) < q).map(([it, q]) => `${fmtNum(q - (e.bank[it] || 0))} ${esc(e.name(it))}`)].filter(Boolean).join(' + ')}</span>`;
+    return `<article class="panel up-card ${a.dGp > 0 && !a.gap ? 'good' : ''}">
+      <div class="uc-top">
+        <span class="ico">${img(a.s.i || skillIcon(a.skill), '', 36)}</span>
+        <div><b>${esc(a.s.n)}</b><span class="muted">${a.skills.map((k) => `${img(skillIcon(k), '', 14)}${k}`).join(' ')}</span></div>
+        ${status}
+      </div>
+      <ul class="fx">${fx.map((f) => `<li class="${f.good ? 'good' : 'bad'}"><b>${f.val}</b> ${esc(f.label)}${f.where ? ` <span class="muted">· ${esc(f.where)}</span>` : ''}</li>`).join('')}</ul>
+      <div class="uc-impact">
+        <div><div class="k">Gold / hr</div><div class="v num ${a.dGp > 0 ? 'green' : 'muted'}">${a.dGp > 0 ? '+' + fmtGp(a.dGp) : '—'}</div></div>
+        <div><div class="k">XP / hr</div><div class="v num ${a.dXp > 0.0005 ? 'green' : 'muted'}">${a.dXp > 0.0005 ? '+' + fmtPct(a.dXp, 1) : '—'}</div></div>
+        <div><div class="k">Pays back</div><div class="v num">${Number.isFinite(a.payback) ? fmtDuration(a.payback) : '—'}</div></div>
+      </div>
+      <div class="uc-cost"><span class="muted">Cost</span>${a.gpCost ? `<span>${img(g.currencies.GoldPieces, '', 16)}<b class="num">${fmtNum(a.gpCost)}</b></span>` : ''}${a.s.ci.map(([it, q]) => `<span data-item="${esc(it)}" class="${(e.bank[it] || 0) >= q ? '' : 'short'}">${img(itemIcon(it), '', 16)}<b class="num">${fmtNum(q)}</b></span>`).join('')}${a.otherCur.map(([c, q]) => `<span>${img(g.currencies[c], '', 16)}<b class="num">${fmtNum(q)}</b></span>`).join('')}</div>
+      ${a.after?.money && a.dGp > 0 ? `<div class="uc-foot">Measured on <b>${esc(a.after.money.m.n)}</b>: ${fmtGp(a.before.gph)} → <b class="gold">${fmtGp(a.after.gph)}</b> gp/hr</div>` : ''}
+    </article>`;
+  };
+  return `
+  <div class="section-head"><div><h2>Upgrades</h2><p>Shop upgrades you can buy next, priced against what they earn you. Each gain is measured on your best method for that skill, with every upgrade you already own.</p></div></div>
+  <div class="filter-row up-controls">
+    <div class="seg" role="group" aria-label="Sort"><button data-upsort="payback" aria-pressed="${state.upSort === 'payback'}">Pays back fastest</button><button data-upsort="gain" aria-pressed="${state.upSort === 'gain'}">Most gold</button><button data-upsort="xp" aria-pressed="${state.upSort === 'xp'}">Most XP</button></div>
+    <div class="seg" role="group" aria-label="Filter"><button data-upfilter="all" aria-pressed="${state.upFilter === 'all'}">All</button><button data-upfilter="now" aria-pressed="${state.upFilter === 'now'}">Can buy now</button></div>
+  </div>
+  ${list.length ? `<div class="up-grid stagger">${list.map(card).join('')}</div>` : `<div class="empty"><b>Nothing new within reach.</b>You own every skilling upgrade you currently qualify for.</div>`}
+  <details class="owned">
+    <summary><b>Upgrades you own</b> <span class="muted">${owned.length} active · already counted in every rate</span></summary>
+    <div class="owned-grid">${owned.map((o) => `<div class="owned-item">${img(o.i || itemIcon(o.id), '', 24)}<div><b>${esc(o.n)}</b><span>${o.b.map((b) => { const t = bonusText(b, lookup); return `${t.val} ${esc(t.label)}${t.where ? ` (${esc(t.where)})` : ''}`; }).join(' · ')}</span></div>${o.kind === 'tool' ? '<span class="pill">equipped</span>' : ''}</div>`).join('')}</div>
+  </details>`;
+}
+
+// ---------------------------------------------------------------- bank
+function viewBank() {
+  const sub = `<div class="seg bank-switch" role="tablist"><button data-bankview="process" aria-pressed="${state.bankView === 'process'}">Process first</button><button data-bankview="all" aria-pressed="${state.bankView === 'all'}">Everything</button></div>`;
+  return state.bankView === 'all' ? viewBankAll(sub) : viewAlchemy(sub);
+}
+
+function viewAlchemy(sub) {
+  const e = E();
+  const list = e.alchemy();
+  const total = list.reduce((a, x) => a + x.uplift, 0);
+  return `
+  <div class="section-head"><div><h2>Bank</h2><p>For every stack: sell it now, or process it into something worth more first. Inputs you use up are counted at their sell value, so the green number is pure extra profit.${total > 0 ? ` Processing everything below adds <b class="green">${fmtGp(total)}</b>.` : ''}</p></div>${sub}</div>
   ${list.length ? `<div class="alch-grid stagger">${list.slice(0, 60).map((a) => {
     const m = a.m;
-    const prim = m.out[0]?.[0];
+    const prim = m.primary;
     const ratio = a.sellNow > 0 ? (a.sellNow + a.uplift) / a.sellNow : 0;
-    return `<article class="panel alch">
-      <div class="alch-top"><span class="ico">${img(e.items[a.item]?.i, '', 40)}</span><div><b>${fmtNum(a.qty)} × ${esc(e.name(a.item))}</b><span>${fmtGp(e.value(a.item))} gp each</span></div></div>
+    return `<article class="panel alch" data-item="${esc(a.item)}">
+      <div class="alch-top"><span class="ico">${img(itemIcon(a.item), '', 40)}</span><div><b>${fmtNum(a.qty)} × ${esc(e.name(a.item))}</b><span>${fmtGp(e.value(a.item))} gp each</span></div></div>
       <div class="alch-vs">
         <div class="alch-opt"><div class="k">Sell now</div><div class="v num">${fmtGp(a.sellNow)}</div><div class="d">instant</div></div>
         <div class="alch-arrow">${svg.arrow}</div>
-        <div class="alch-opt best"><div class="k">${esc(m.s)} first</div><div class="v num">${fmtGp(a.uplift, { sign: true })}</div><div class="d">${img(e.items[prim]?.i || m.i, '', 16)}${esc(m.n)}</div></div>
+        <div class="alch-opt best"><div class="k">${esc(m.s)} first</div><div class="v num">${fmtGp(a.uplift, { sign: true })}</div><div class="d">${img(itemIcon(prim) || m.i, '', 16)}${esc(m.n)}</div></div>
       </div>
       <div class="alch-foot"><span>${fmtDuration(a.b.hours)} of ${esc(m.s.toLowerCase())} · ${fmtGp(a.b.gpPerHour)}/hr</span>${ratio > 1.05 ? `<span class="mult">${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}× the value</span>` : ''}</div>
     </article>`;
   }).join('')}</div>` : `<div class="empty"><b>No profitable processing for your current bank.</b>Your stacks are already worth the most as they are.</div>`}`;
 }
 
-// ---------------------------------------------------------------- bank
-function viewBank() {
-  const e = state.engine;
+function viewBankAll(sub) {
+  const e = E();
   const { total, rows } = e.bankValue();
   let list = rows.slice();
   if (state.bankQ) list = list.filter((r) => e.name(r.item).toLowerCase().includes(state.bankQ.toLowerCase()));
@@ -491,7 +764,7 @@ function viewBank() {
   if (state.bankSort === 'each') list.sort((a, b) => b.v - a.v);
   const top = rows[0]?.total || 1;
   return `
-  <div class="section-head"><div><h2>Your bank</h2><p>${fmtNum(rows.length)} stacks worth <b class="gold">${fmtGp(total, { compact: false })} gp</b> if you sold everything now.</p></div></div>
+  <div class="section-head"><div><h2>Bank</h2><p>${fmtNum(rows.length)} stacks worth <b class="gold">${fmtGp(total, { compact: false })} gp</b> if you sold everything now. Click any item to see where it comes from and what it makes.</p></div>${sub}</div>
   <div class="bank-head">
     <div class="seg" role="group" aria-label="Sort bank">
       ${[['value', 'Stack value'], ['each', 'Price each'], ['qty', 'Quantity'], ['name', 'Name']].map(([k, l]) => `<button data-bsort="${k}" aria-pressed="${state.bankSort === k}">${l}</button>`).join('')}
@@ -499,17 +772,17 @@ function viewBank() {
     <div class="search">${svg.search}<input id="bq" type="search" placeholder="Search your bank" value="${esc(state.bankQ)}" aria-label="Search bank"/></div>
   </div>
   <div class="bank-grid" id="bank-grid">${list.map((r) => `
-    <div class="tile" title="${esc(e.name(r.item))}">
-      <div class="ti">${img(e.items[r.item]?.i, '', 40)}<span class="qty num">${fmtGp(r.qty)}</span></div>
+    <button class="tile" data-item="${esc(r.item)}" title="${esc(e.name(r.item))}">
+      <div class="ti">${img(itemIcon(r.item), '', 40)}<span class="qty num">${fmtGp(r.qty)}</span></div>
       <div class="nm">${esc(e.name(r.item))}</div>
       <div class="val"><span>${fmtGp(r.v)} ea</span><b class="num">${fmtGp(r.total)}</b></div>
       <span class="share" style="width:${Math.max(1, (r.total / top) * 100)}%"></span>
-    </div>`).join('')}</div>`;
+    </button>`).join('')}</div>`;
 }
 
-// ---------------------------------------------------------------- upcoming
-function viewUpcoming() {
-  const e = state.engine;
+// ---------------------------------------------------------------- unlocks
+function viewUnlocks() {
+  const e = E();
   const list = e.upcoming(400);
   const groups = new Map();
   for (const x of list) {
@@ -517,39 +790,115 @@ function viewUpcoming() {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(x);
   }
-  const g = state.game;
   return `
-  <div class="section-head"><div><h2>Next unlocks</h2><p>The closest money makers you haven't unlocked yet, valued at the level where they open up, with inputs at their sell value.</p></div></div>
+  <div class="section-head"><div><h2>Next unlocks</h2><p>The most lucrative money makers you haven't unlocked yet, valued at the level where they open, with inputs at their sell value. The time estimate uses your fastest training method.</p></div></div>
   ${[...groups.entries()].map(([k, xs]) => `<div class="up-group"><h3>${k}</h3>${xs.slice(0, 10).map((x) => {
     const lvReq = x.missing.find((s) => s.kind === 'lvl');
-    const skill = lvReq ? lvReq.text.split(' ')[0] : x.m.s;
-    const need = lvReq ? Number(lvReq.text.split(' ').pop()) : x.m.lv;
+    const skill = lvReq?.skill || x.m.s;
+    const need = lvReq?.need || x.m.lv;
     const sv = state.save.skills[skill];
     const hi = xpForLevel(need);
     const xpLeft = sv ? Math.max(0, hi - sv.xp) : 0;
     const prog = sv ? Math.max(2, Math.min(100, (sv.xp / hi) * 100)) : 0;
-    return `<div class="up-row">
-      <span class="ico">${img(x.m.i || e.items[x.m.out[0]?.[0]]?.i, '', 34)}</span>
-      <div class="title"><b>${esc(x.m.n)}</b><span class="sub">${img(g.skills[x.m.s]?.i, '', 15)}${x.m.s}<span class="sep">·</span><span class="need">needs ${x.missing.map((s) => esc(s.text)).join(', ')}</span></span></div>
-      <div class="progress"><div class="track"><i style="width:${prog}%"></i></div><small class="num">${fmtGp(xpLeft)} xp to go</small></div>
+    const best = e.trainOptions(skill)[0];
+    return `<button class="up-row" data-tskill-go="${esc(skill)}" data-target-go="${need}">
+      <span class="ico">${img(methodIcon(x.m), '', 34)}</span>
+      <div class="title"><b>${esc(x.m.n)}</b><span class="sub">${img(skillIcon(x.m.s), '', 15)}${x.m.s}<span class="sep">·</span><span class="need">needs ${x.missing.map((s) => esc(s.text)).join(', ')}</span></span></div>
+      <div class="progress"><div class="track"><i style="width:${prog}%"></i></div><small class="num">${fmtGp(xpLeft)} xp${best ? ` · ~${fmtDuration(xpLeft / best.xph)}` : ''}</small></div>
       <div class="gph"><span class="v num">${fmtGp(x.gph)}</span> <span class="u">gp/hr</span></div>
-    </div>`;
+    </button>`;
   }).join('')}</div>`).join('') || '<div class="empty"><b>Everything is unlocked.</b>Nothing left to chase.</div>'}`;
 }
 
-function viewAll() {
-  // Explorer: show every method ranked by value added at 99
-  const prevMode = state.mode;
-  state.mode = 'sell';
-  const html = viewMoney().replace('<h2>Money makers</h2>', '<h2>All methods at 99</h2>');
-  state.mode = prevMode;
-  return html;
+// ---------------------------------------------------------------- item drawer
+function openItem(id) {
+  const e = E(), g = G();
+  const info = e.itemInfo(id);
+  if (!info) return;
+  const d = $('#drawer');
+  const it = info.it;
+  const toolFx = info.tool ? info.tool.map((b) => bonusText(b, lookup)) : [];
+  const srcRows = info.sources.slice(0, 10).map((s) => `
+    <div class="dr-row ${s.unlocked ? '' : 'locked'}">
+      ${img(methodIcon(s.m), '', 28)}
+      <div><b>${esc(s.m.n)}</b><span>${img(skillIcon(s.m.s), '', 13)}${s.m.s} ${s.m.lv}${s.unlocked ? '' : ` · ${svg.lock} locked`}${s.m.in.length ? ` · from ${s.m.in.map(([i, q]) => `<i class="dr-in" data-item="${esc(i)}" title="${esc(e.name(i))}">${fmtNum(q, 2)}×${img(itemIcon(i), '', 13)}</i>`).join(' ')}` : ''}</span></div>
+      <span class="num">${s.perHour >= 1 ? fmtNum(s.perHour) : fmtNum(s.perHour, 2)}<small>/hr</small></span>
+    </div>`).join('');
+  const useRows = info.uses.slice(0, 10).map((u) => `
+    <div class="dr-row link ${u.unlocked ? '' : 'locked'}" data-item="${esc(u.m.primary || '')}">
+      ${img(methodIcon(u.m), '', 28)}
+      <div><b>${esc(u.m.n)}</b><span>${img(skillIcon(u.m.s), '', 13)}${u.m.s} ${u.m.lv}${u.unlocked ? '' : ` · ${svg.lock} locked`}</span></div>
+      <span class="num ${u.s.gpPerHour < 0 ? 'red' : 'green'}">${fmtGp(u.s.gpPerHour, { sign: true })}<small>/hr</small></span>
+    </div>`).join('');
+  const make = info.cost && info.cost.via.kind === 'make' ? `<div class="dr-fact"><span class="k">Make it yourself</span><span>${fmtMs(info.cost.t)} of play${info.cost.gp > 0.5 ? ` + ${fmtGp(info.cost.gp)} gold` : ''} each, via ${esc(info.cost.via.m.n)}</span></div>` : '';
+  d.innerHTML = `
+    <div class="dr-head">
+      <span class="dr-art">${img(it.i, it.n, 56)}</span>
+      <div><h3>${esc(it.n)}</h3><div class="muted">${it.v ? `Sells for <b class="gold">${fmtNum(it.v)}</b> gold` : 'Cannot be sold'}${it.slot ? ` · ${esc(it.slot.replace(/([a-z])([A-Z])/g, '$1 $2'))}` : ''}</div></div>
+      <button class="btn btn-ghost dr-close" aria-label="Close" data-close>${svg.x}</button>
+    </div>
+    <div class="dr-body">
+      ${state.explorer ? '' : `<div class="dr-facts">
+        <div class="dr-fact"><span class="k">In your bank</span><span><b class="num">${fmtNum(info.have)}</b>${info.have && it.v ? ` · worth ${fmtGp(info.have * it.v)}` : ''}${info.equipped ? ' · <span class="green">equipped</span>' : ''}</span></div>
+        ${info.buy ? `<div class="dr-fact"><span class="k">Shop</span><span>${fmtGp(info.buy.price)} gold each (${esc(info.buy.shop?.n || '')})</span></div>` : ''}
+        ${make}
+      </div>`}
+      ${toolFx.length ? `<h4>When equipped</h4><ul class="fx">${toolFx.map((f) => `<li class="${f.good ? 'good' : 'bad'}"><b>${f.val}</b> ${esc(f.label)}${f.where ? ` <span class="muted">· ${esc(f.where)}</span>` : ''}${f.skill ? ` <span class="muted">· ${esc(f.skill)}</span>` : ''}${f.cond ? ' <span class="muted">(conditional)</span>' : ''}</li>`).join('')}</ul>` : ''}
+      ${srcRows ? `<h4>How to get it</h4><div class="dr-list">${srcRows}</div>` : ''}
+      ${useRows ? `<h4>What it's used for <span class="muted">· value added per hour</span></h4><div class="dr-list">${useRows}</div>` : ''}
+      ${!srcRows && !useRows && !info.buy ? '<p class="muted">Not produced or used by any skill this site models yet (combat drops, quests, hunting and ranching).</p>' : ''}
+    </div>`;
+  if (!d.open) d.showModal();
+  d.focus({ preventScroll: true }); // not the close button, so a held Enter key can't close it
+  d.scrollTop = 0;
+}
+
+// ---------------------------------------------------------------- search palette
+let palIdx = 0;
+function openPalette() {
+  const p = $('#palette');
+  p.innerHTML = `<div class="pal-box"><div class="pal-in">${svg.search}<input id="pal-q" placeholder="Search any item…" autocomplete="off" spellcheck="false"/><span class="kbd">Esc</span></div><div class="pal-list" id="pal-list"></div></div>`;
+  p.showModal();
+  const q = $('#pal-q');
+  const render = () => {
+    const s = q.value.trim().toLowerCase();
+    const items = Object.entries(G().items).filter(([, v]) => v.n && v.i);
+    let res;
+    if (!s) res = Object.keys(E().bank).map((id) => [id, G().items[id]]).filter(([, v]) => v).sort((a, b) => (E().bank[b[0]] * b[1].v) - (E().bank[a[0]] * a[1].v));
+    else {
+      res = items.filter(([, v]) => v.n.toLowerCase().includes(s));
+      res.sort((a, b) => (b[1].n.toLowerCase().startsWith(s) - a[1].n.toLowerCase().startsWith(s)) || ((E().bank[b[0]] || 0) > 0) - ((E().bank[a[0]] || 0) > 0) || a[1].n.length - b[1].n.length);
+    }
+    res = res.slice(0, 40);
+    palIdx = Math.min(palIdx, Math.max(0, res.length - 1));
+    $('#pal-list').innerHTML = res.length ? (s ? '' : '<div class="pal-h">In your bank</div>') + res.map(([id, v], i) => `<button class="pal-row ${i === palIdx ? 'on' : ''}" data-pal="${esc(id)}">${img(v.i, '', 26)}<span>${esc(v.n)}</span><span class="muted num">${E().bank[id] ? fmtGp(E().bank[id]) + ' in bank · ' : ''}${v.v ? fmtGp(v.v) + ' gp' : ''}</span></button>`).join('') : '<div class="pal-h">No items match.</div>';
+  };
+  q.oninput = () => { palIdx = 0; render(); };
+  q.onkeydown = (ev) => {
+    const rows = $$('.pal-row', p);
+    if (ev.key === 'ArrowDown') { palIdx = Math.min(rows.length - 1, palIdx + 1); ev.preventDefault(); }
+    else if (ev.key === 'ArrowUp') { palIdx = Math.max(0, palIdx - 1); ev.preventDefault(); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); const r = rows[palIdx]; if (r) { p.close(); openItem(r.dataset.pal); } return; }
+    else return;
+    rows.forEach((r, i) => r.classList.toggle('on', i === palIdx));
+    rows[palIdx]?.scrollIntoView({ block: 'nearest' });
+  };
+  p.onclick = (ev) => {
+    const r = ev.target.closest('[data-pal]');
+    if (r) { p.close(); openItem(r.dataset.pal); return; }
+    if (ev.target === p) p.close();
+  };
+  render();
+  q.focus();
 }
 
 // ---------------------------------------------------------------- events
 function bindView(v) {
   v.onclick = (ev) => {
-    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-bsort],#more');
+    const itemEl = ev.target.closest('[data-item]');
+    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go]');
+    // Item icons open the item drawer, even inside a clickable row.
+    if (itemEl?.dataset.item && (!t || (t !== itemEl && t.contains(itemEl)))) { ev.stopPropagation(); openItem(itemEl.dataset.item); return; }
     if (!t) return;
     if (t.dataset.toggle) {
       const id = t.dataset.toggle;
@@ -557,18 +906,32 @@ function bindView(v) {
       if (state.open.has(id)) { state.open.delete(id); row.classList.remove('open'); t.setAttribute('aria-expanded', 'false'); }
       else {
         state.open.add(id);
-        const x = rowsForMoney().find((r) => r.m.id === id) || (state.tab === 'upcoming' ? null : null);
+        const x = rowsForMoney().find((r) => r.m.id === id);
         if (x) row.querySelector('.inner').innerHTML = details(x);
         requestAnimationFrame(() => row.classList.add('open'));
         t.setAttribute('aria-expanded', 'true');
       }
       return;
     }
+    if (t.dataset.openRow) {
+      const row = v.querySelector(`.row[data-id="${CSS.escape(t.dataset.openRow)}"] .row-main`);
+      if (row) { if (!row.closest('.row').classList.contains('open')) row.click(); row.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+      return;
+    }
     if (t.dataset.mode) { state.mode = t.dataset.mode; state.limit = 30; state.open.clear(); savePrefs(); return rerender(); }
     if (t.dataset.skill !== undefined) { state.skill = t.dataset.skill; state.limit = 30; return rerender(); }
-    if (t.dataset.banksort !== undefined) { state.bankSortTotal = t.dataset.banksort === '1'; return rerender(); }
+    if (t.dataset.window) { state.window = Number(t.dataset.window); savePrefs(); return rerender(); }
+    if (t.dataset.banksort !== undefined) { state.bankSortTotal = t.dataset.banksort === '1'; savePrefs(); return rerender(); }
     if (t.dataset.bsort) { state.bankSort = t.dataset.bsort; savePrefs(); return rerender(); }
-    if (t.id === 'more') { state.limit += 30; return rerender(true); }
+    if (t.dataset.bankview) { state.bankView = t.dataset.bankview; savePrefs(); return rerender(); }
+    if (t.dataset.tskill) { state.trainSkill = t.dataset.tskill; state.trainTarget = null; state.trainLevel = null; savePrefs(); return rerender(); }
+    if (t.dataset.tskillGo) { state.trainSkill = t.dataset.tskillGo; state.trainTarget = Number(t.dataset.targetGo); state.trainLevel = null; return go('train'); }
+    if (t.dataset.target) { state.trainTarget = Number(t.dataset.target); return rerender(); }
+    if (t.dataset.prefer) { state.trainPrefer = t.dataset.prefer; savePrefs(); return rerender(); }
+    if (t.dataset.upsort) { state.upSort = t.dataset.upsort; savePrefs(); return rerender(); }
+    if (t.dataset.upfilter) { state.upFilter = t.dataset.upfilter; return rerender(); }
+    if (t.dataset.gotab) return go(t.dataset.gotab);
+    if (t.id === 'more') { state.limit += 30; return rerender(); }
   };
   const q = $('#q', v);
   if (q) q.oninput = debounce(() => { state.q = q.value; state.limit = 30; rerender(false, '#q'); }, 140);
@@ -576,49 +939,43 @@ function bindView(v) {
   if (bq) bq.oninput = debounce(() => { state.bankQ = bq.value; rerender(false, '#bq'); }, 120);
   const passive = $('#passive', v);
   if (passive) passive.onchange = () => { state.passive = passive.checked; savePrefs(); rerender(); };
+  const mods = $('#mods', v);
+  if (mods) mods.onchange = () => { state.mods = mods.checked; savePrefs(); applyPlayer(); const y = scrollY; renderDashboard(); scrollTo({ top: y }); toast(state.mods ? 'Rates include your upgrades' : 'Showing base rates, without upgrades'); };
+  const target = $('#target', v);
+  if (target) target.onchange = () => { const n = Math.round(Number(target.value)); if (n >= 2 && n <= 99) { state.trainTarget = n; rerender(); } };
+  const atl = $('#atlevel', v);
+  if (atl) atl.onchange = () => { const n = Math.round(Number(atl.value)); if (n >= 1 && n <= 99) { state.trainLevel = n; rerender(false, '#atlevel'); } };
 }
 
 function rerender(keepScroll = true, focusSel) {
   const y = window.scrollY;
   renderView();
   if (keepScroll) window.scrollTo({ top: y });
-  if (focusSel) { const el = $(focusSel); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }
+  if (focusSel) { const el = $(focusSel); if (el) { el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch { /* number inputs */ } } }
 }
 
-const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 const order = (s) => { const i = SKILL_ORDER.indexOf(s); return i < 0 ? 99 : i; };
 
-function relTime(d) {
-  const s = (Date.now() - d.getTime()) / 1000;
-  if (!Number.isFinite(s)) return '';
-  if (s < 90) return 'just now';
-  if (s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return `${Math.round(s / 86400)} days ago`;
-}
-
-function countUp() {
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  document.querySelectorAll('[data-count]').forEach((el) => {
-    const target = Number(el.dataset.count);
-    if (!Number.isFinite(target) || target <= 0) return;
-    const t0 = performance.now(), dur = 900;
-    const step = (t) => {
-      const p = Math.min(1, (t - t0) / dur);
-      const eased = 1 - Math.pow(1 - p, 4);
-      el.textContent = fmtGp(target * eased);
-      if (p < 1) requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  });
-}
-
-// global paste: paste a save string anywhere on the landing page
+// ---------------------------------------------------------------- global
 document.addEventListener('paste', (e) => {
   if (state.save || e.target.closest?.('textarea,input')) return;
   const t = e.clipboardData?.getData('text');
   if (t && t.length > 200) { e.preventDefault(); loadSave(t).catch((err) => renderLanding(err.message)); }
 });
-window.addEventListener('hashchange', () => { if (location.hash === '#explore' && state.game) startExplorer(); });
+document.addEventListener('keydown', (e) => {
+  if (!state.save) return;
+  const typing = e.target.closest?.('input,textarea');
+  if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing)) { e.preventDefault(); if (!$('#palette').open) openPalette(); }
+});
+$('#drawer').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget || e.target.closest('[data-close]')) { $('#drawer').close(); return; }
+  const it = e.target.closest('[data-item]');
+  if (it) openItem(it.dataset.item);
+});
+window.addEventListener('hashchange', () => {
+  const h = parseHash();
+  if (h.explore && state.game) return startExplorer();
+  if (h.tab && state.save && h.tab !== state.tab) { if (h.tab === 'train' && h.arg) state.trainSkill = h.arg; go(h.tab); }
+});
 
-boot().catch((e) => { app.innerHTML = `<div class="empty"><b>Something went wrong loading the game data.</b>${esc(e.message)}</div>`; });
+boot().catch((e) => { app.innerHTML = `<div class="empty"><b>Something went wrong loading the game data.</b>${esc(e.message)}</div>`; console.error(e); });

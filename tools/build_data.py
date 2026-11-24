@@ -120,6 +120,47 @@ def iq(lst, qty="Quantity"):
     return [[short(x["Item"]), x[qty]] for x in lst or []]
 
 
+CTX_KEYS = {"Recipe": "r", "Category": "cat", "Subcategory": "sub", "Item": "it", "Location": "loc", "Currency": "cur"}
+
+
+def bonuses_of(B):
+    """Flatten a Bonuses block into [statsType, statName, value, ctx]. ctx keys: e (entity), c (component),
+    r/cat/sub/it/loc/cur. Conditional bonuses and contexts we can't evaluate are marked with ctx.x."""
+    out = []
+    for x in (B or {}).get("Component") or []:
+        st = x.get("Stat") or {}
+        if not st:
+            continue
+        ctx = {}
+        for k, v in (x.get("LocalContext") or {}).items():
+            if not v:
+                continue
+            if k == "Component":
+                ctx["e"] = short(v.get("Entity"))
+                ctx["c"] = v.get("Component")
+            elif k in CTX_KEYS:
+                ctx[CTX_KEYS[k]] = short(v)
+            else:
+                ctx["x"] = 1
+        if x.get("Condition") or x.get("Scaling") or x.get("FromContext"):
+            ctx["x"] = 1
+        out.append([short(st["StatsType"]), st["Name"], x["Value"], ctx])
+    for x in (B or {}).get("Global") or []:
+        if x.get("StatGroup") and not x.get("Condition"):
+            out.append(["G", x["StatGroup"], x["Value"], {}])
+    return out
+
+
+def table(lst):
+    """Weighted drop table -> [[item, weight, min, max]]"""
+    return [[short(x["Item"]), x["Weight"], x.get("MinQuantity", x.get("Quantity", 1)), x.get("MaxQuantity", x.get("Quantity", 1))]
+            for x in lst or []]
+
+
+def iqc(lst):
+    return [[short(x["Item"]), x["Quantity"], x["Chance"]] for x in lst or []]
+
+
 def weighted_ev(table):
     """Expected (item -> qty) from a single roll of a weighted table with MinQuantity/MaxQuantity."""
     tot = sum(x["Weight"] for x in table) or 1
@@ -187,6 +228,12 @@ def main():
             "c": [short(c) for c in (it.get("Capabilities") or {})],
             "t": [short(b["BankTag"]) for b in it.get("BankTags") or [] if b.get("IsProduct")],
         }
+        tb = (it.get("Capabilities") or {}).get(NS + "Toolbelt")
+        if tb:
+            items[it["Id"]]["slot"] = short(tb.get("FitsInSlot"))
+            bb = bonuses_of(tb.get("Bonuses"))
+            if bb:
+                items[it["Id"]]["tb"] = bb
 
     # shop: buyable items priced in GP (unlimited, single currency).
     # Only purchases registered in the Shop entity config actually appear in the game's
@@ -199,7 +246,12 @@ def main():
             continue
         cur = [[short(c["Currency"]), c["Quantity"]] for c in s["Costs"]["Currencies"]]
         shop[s["Id"]] = {"n": s["DisplayName"], "i": icon(s.get("Icon")), "cost": cur,
-                         "ci": iq(s["Costs"]["Items"]), "r": reqs_of(s.get("Requirements"))}
+                         "ci": iq(s["Costs"]["Items"]), "r": reqs_of(s.get("Requirements")),
+                         "sub": short(s.get("Subcategory")), "lim": s.get("DefaultBuyLimit", 0),
+                         "pi": iq((s.get("Provides") or {}).get("Items"))}
+        bb = bonuses_of((s.get("Provides") or {}).get("Bonuses"))
+        if bb:
+            shop[s["Id"]]["b"] = bb
         prov = s["Provides"]["Items"]
         if (len(prov) == 1 and not s["Costs"]["Items"] and len(cur) == 1 and cur[0][0] == "GoldPieces"
                 and s.get("DefaultBuyLimit", 0) == 0):
@@ -208,7 +260,16 @@ def main():
             if iid not in buy or buy[iid]["p"] > price:
                 buy[iid] = {"p": price, "shop": s["Id"]}
 
+    shop_order = {short(p["Id"]): p["Priority"] for p in EC[NS + "Shop"]["Purchases"]}
+    for k, v in shop.items():
+        v["o"] = shop_order.get(k, 0)
+    sub_order = {short(p["Id"]): p["Priority"] for p in EC[NS + "Shop"].get("Subcategories") or []}
+    cat_order = {short(p["Id"]): p["Priority"] for p in EC[NS + "Shop"].get("Categories") or []}
+    shop_cats = {c["Id"]: {"n": c["DisplayName"], "i": icon(c.get("Icon")), "o": cat_order.get(c["Id"], 0)} for c in O["ShopCategory"]}
+    shop_subs = {c["Id"]: {"n": c["DisplayName"], "cat": short(c.get("Category")), "o": sub_order.get(c["Id"], 0)} for c in O["ShopSubcategory"]}
+
     cat_reqs = {c["Id"]: c.get("Requirements") for c in O["RecipeCategory"]}
+    cat_names = {c["Id"]: c["DisplayName"] for c in O["RecipeCategory"]}
     fish_loc = {c["Id"]: c for c in O["FishingLocation"]}
     thv_loc = {c["Id"]: c for c in O["ThievingLocation"]}
     methods = []
@@ -225,8 +286,10 @@ def main():
             "id": f"{skill}:{r['Id']}", "s": skill, "n": name or (r["DisplayName"] if isinstance(r["DisplayName"], str) else r["DisplayName"]["Singular"]),
             "i": icon(icon_res or r.get("Icon") or r.get("Media")), "k": kind, "ms": round(ms, 3), "xp": xp,
             "in": [[a, b] for a, b in ins], "out": tolist(outs) if isinstance(outs, dict) else outs, "gp": round(gp, 4),
-            "lv": base_level(rq, skill), "r": rq, "cat": cat,
+            "lv": base_level(rq, skill), "r": rq, "cat": cat, "rid": r["Id"],
         }
+        if r.get("Subcategory"):
+            m["sub"] = short(r["Subcategory"])
         if extra:
             m.update(extra)
         methods.append(m)
@@ -240,7 +303,9 @@ def main():
         for x in r["RandomProductsPerCut"]:
             addmap(outs, {short(x["Item"]): x["Quantity"] * x["Chance"]})
         push("Woodcutting", r, "active", r["BaseInterval"] * hp, r["BaseExperience"], [], outs,
-             extra={"note": f"{hp} hits per log"})
+             extra={"note": f"{hp} hits per log",
+                    "x": {"t": "wc", "iv": r["BaseInterval"], "hp": hp, "p": short(r["Product"]["Item"]), "q": r["Product"]["Quantity"],
+                          "hit": iqc(r["RandomProductsPerHit"]), "cut": iqc(r["RandomProductsPerCut"])}})
 
     # Mining: expected hits to break a rock given BaseProductChance.
     for r in O["MiningRecipe"]:
@@ -249,7 +314,10 @@ def main():
         for x in r["RandomProductsPerHit"] or []:
             addmap(outs, {short(x["Item"]): x["Quantity"] * x["Chance"] * hits})
         push("Mining", r, "active", r["BaseInterval"] * hits, r["BaseExperience"], [], outs,
-             extra={"note": f"~{hits:.1f} swings per ore"})
+             extra={"note": f"~{hits:.1f} swings per ore",
+                    "x": {"t": "mine", "iv": r["BaseInterval"], "pc": r["BaseProductChance"], "p": short(r["Product"]["Item"]),
+                          "q": r["Product"]["Quantity"], "hit": iqc(r["RandomProductsPerHit"]), "bar": short(r.get("BarItem")),
+                          "stone": short(r.get("StoneItem")), "ess": short(r.get("EssenceItem"))}})
 
     # Fishing: uniform interval; fish vs junk; special items rolled in ascending-chance order, first success wins.
     for r in O["FishingRecipe"]:
@@ -265,7 +333,9 @@ def main():
             miss *= 1 - x["Chance"]
         push("Fishing", r, "active", (r["BaseMinInterval"] + r["BaseMaxInterval"]) / 2, r["BaseExperience"], [], outs,
              reqs=reqs_of(r.get("Requirements"), loc.get("Requirements")),
-             extra={"loc": loc.get("DisplayName")})
+             extra={"loc": loc.get("DisplayName"), "locId": short(r["Location"]),
+                    "x": {"t": "fish", "min": r["BaseMinInterval"], "max": r["BaseMaxInterval"], "fc": fc,
+                          "fish": table(r["RandomProducts"]), "junk": short(r.get("JunkItem")), "sp": iqc(r["SpecialProducts"])}})
 
     # Thieving: success depends on level -> stored raw, resolved client-side.
     for r in O["ThievingRecipe"]:
@@ -284,13 +354,18 @@ def main():
         push("Thieving", r, "active", r["BaseInterval"], r["BaseExperience"] / max(1, r["Stages"]), [], loot, gp=gp,
              reqs=reqs_of(r.get("Requirements"), r.get("AccessRequirements"), loc.get("Requirements")),
              extra={"succ": {"t": "thieving", "p": r["Perception"]}, "dmg": r["Damage"], "loc": loc.get("DisplayName"),
-                    "stages": r["Stages"], "rt": short(r["RecipeType"])})
+                    "stages": r["Stages"], "rt": short(r["RecipeType"]),
+                    "x": {"t": "thv", "iv": r["BaseInterval"], "perc": r["Perception"], "st": max(1, r["Stages"]),
+                          "cc": r["BaseCommonLootChance"], "rc": r["BaseRareLootChance"], "gc": r["BaseCurrencyLootChance"],
+                          "g": [short(cr.get("Currency")), cr.get("MinQuantity", 0), cr.get("MaxQuantity", 0)] if cr else None,
+                          "common": table(r["CommonDropTable"]), "rare": table(r["RareDropTable"]), "comp": table(r["CompletionDropTable"])}})
 
     # Cooking: success = clamp((69+level)/(69+difficulty)); ingredients spent on failure.
     for r in O["CookingRecipe"]:
         outs = {short(p["Item"]): p["Quantity"] * p["Chance"] for p in r["Products"]}
         push("Cooking", r, "active", r["BaseInterval"], r["BaseExperience"], iq(r["Ingredients"]["Items"]), outs,
-             extra={"succ": {"t": "cooking", "d": r["Difficulty"]}})
+             extra={"succ": {"t": "cooking", "d": r["Difficulty"]},
+                    "x": {"t": "cook", "iv": r["BaseInterval"], "diff": r["Difficulty"], "pr": iqc(r["Products"])}})
 
     # Artisan skills: Steps intervals per craft; each product rolled independently by chance.
     for r in O["ArtisanRecipe"]:
@@ -302,22 +377,32 @@ def main():
             addmap(outs, {short(p["Item"]): p["Quantity"] * p["Chance"]})
         steps = max(1, r.get("Steps") or 1)
         push(skill, r, "active", r["BaseInterval"] * steps, r["BaseExperience"], iq(r["Ingredients"]["Items"]), outs,
-             extra={"note": f"{steps} steps" if steps > 1 else None})
+             extra={"note": f"{steps} steps" if steps > 1 else None,
+                    "x": {"t": "art", "iv": r["BaseInterval"], "steps": steps, "pr": iqc(r["Products"])}})
 
-    # Herblore: four timed stages per batch.
+    # Herblore: a batch is prepare + heat + stir once, then 10 bottlings. Each bottling spends the
+    # ingredients and yields the products + XP (ActiveHerbloreRecipe.MaxBottledCount = 10).
+    BOTTLES = 10
     for r in O["HerbloreRecipe"]:
-        ms = r["BasePreparingInterval"] + r["BaseHeatingInterval"] + r["BaseStirringInterval"] + r["BaseBottlingInterval"]
+        ms = (r["BasePreparingInterval"] + r["BaseHeatingInterval"] + r["BaseStirringInterval"]) / BOTTLES + r["BaseBottlingInterval"]
         outs = {}
         for p in r["Products"]:
             addmap(outs, {short(p["Item"]): p["Quantity"] * p["Chance"]})
-        push("Herblore", r, "active", ms, r["BaseExperience"], iq(r["Ingredients"]["Items"]), outs)
+        push("Herblore", r, "active", ms, r["BaseExperience"], iq(r["Ingredients"]["Items"]), outs,
+             extra={"note": f"{BOTTLES} bottles per brew",
+                    "x": {"t": "herb", "p": r["BasePreparingInterval"], "h": r["BaseHeatingInterval"], "s": r["BaseStirringInterval"],
+                          "b": r["BaseBottlingInterval"], "n": BOTTLES, "pr": iqc(r["Products"])}})
 
     # Firemaking: burn a log, by-products by chance.
     for r in O["FiremakingRecipe"]:
         outs = {}
         for p in r["Products"]:
             addmap(outs, {short(p["Item"]): p["Quantity"] * p["Chance"]})
-        push("Firemaking", r, "active", r["BaseInterval"], r["BaseExperience"], iq(r["Ingredients"]["Items"]), outs)
+        cr = r.get("CurrencyReward") or {}
+        push("Firemaking", r, "active", r["BaseInterval"], r["BaseExperience"], iq(r["Ingredients"]["Items"]), outs,
+             gp=cr.get("Quantity", 0) if short(cr.get("Currency")) == "GoldPieces" else 0,
+             extra={"x": {"t": "fm", "iv": r["BaseInterval"], "pr": iqc(r["Products"]),
+                          "cur": [short(cr["Currency"]), cr["Quantity"]] if cr else None}})
 
     # Farming: passive, per plot.
     for r in O["FarmingRecipe"]:
@@ -360,16 +445,60 @@ def main():
         im.save(dst, "WEBP", lossless=True, method=6)
         written += 1
     have = set(os.listdir(os.path.join(OUT, "icons")))
-    for coll in (items.values(), methods, shop.values(), skills.values()):
+    for coll in (items.values(), methods, shop.values(), skills.values(), shop_cats.values()):
         for x in coll:
             if x.get("i") and x["i"] not in have:
                 x["i"] = None
     cur_icons = {k: (v if v in have else None) for k, v in cur_icons.items()}
 
+    # ---- mastery guilds: rank thresholds, task points + how to check each task, rank bonuses
+    task_by_id = {t["Id"]: t for t in O["MasteryGuildTask"]}
+    cat_points = {c["Id"]: c["BasePoints"] for c in O["MasteryGuildCategory"]}
+    rank_pct = {r["Id"]: r["PointPercentRequired"] for r in O["MasteryGuildRank"]}
+    guild = {}
+    for ent, cfg in EC.items():
+        sk = short(ent)
+        if not cfg.get("MasteryGuildTasks"):
+            continue
+        tasks = {}
+        for ref in cfg["MasteryGuildTasks"]:
+            t = task_by_id.get(short(ref["Id"]))
+            if not t:
+                continue
+            pts = cat_points.get(short(t["Category"]), 1)
+            if t.get("Goal"):
+                tasks[t["Id"]] = [pts, "g"]
+            elif t.get("TriggerGoal"):
+                tasks[t["Id"]] = [pts, "t"]
+            else:
+                cg = t.get("ConditionGoal") or {}
+                ty, dd = short(cg.get("Type")), cg.get("Data") or {}
+                if ty == "Level":
+                    tasks[t["Id"]] = [pts, "l", short(dd["Component"]["Entity"]), dd["Level"]]
+                elif ty == "ItemStatistic":
+                    tasks[t["Id"]] = [pts, "i", short(dd.get("Statistic")), short(dd.get("Item")), dd.get("Value", 1)]
+                elif ty == "ValueStatistic":
+                    tasks[t["Id"]] = [pts, "v", short(dd.get("Statistic")), dd.get("Value", 1)]
+                else:
+                    tasks[t["Id"]] = [pts, "u", ty]
+        ranks = {short(r["Id"]): rank_pct.get(short(r["Id"]), 0) for r in cfg.get("MasteryGuildRanks") or []}
+        bonuses = []
+        for ref in cfg.get("MasteryGuildBonuses") or []:
+            b = next((x for x in O["MasteryGuildBonus"] if x["Id"] == short(ref["Id"])), None)
+            if not b:
+                continue
+            bb = bonuses_of((b.get("Rewards") or {}).get("Bonuses"))
+            rr = [short(q["Data"].get("Rank")) for q in b.get("Requirements") or [] if short(q["Type"]) == "MasteryGuildRank"]
+            if bb and rr:
+                bonuses.append({"id": b["Id"], "n": b["DisplayName"], "rank": rr[0], "b": bb})
+        guild[sk] = {"ranks": ranks, "tasks": tasks, "bonuses": bonuses,
+                     "rankNames": {short(r["Id"]): next((x["DisplayName"] for x in O["MasteryGuildRank"] if x["Id"] == short(r["Id"])), r["Id"]) for r in cfg.get("MasteryGuildRanks") or []}}
+
     game = {
         "v": 1,
         "gameVersion": "Alpha 0.11.5.5 (save v31)",
         "items": items, "buy": buy, "shop": shop, "methods": methods, "skills": skills, "currencies": cur_icons,
+        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild,
     }
     with open(os.path.join(OUT, "data", "game.json"), "w", encoding="utf-8") as f:
         json.dump(game, f, separators=(",", ":"), ensure_ascii=False)

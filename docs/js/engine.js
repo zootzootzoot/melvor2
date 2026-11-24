@@ -1,29 +1,94 @@
-// Money-making engine: turns game data + a decoded save into ranked methods.
-// Rates are base rates from the game's own formulas (no tool/mastery modifiers).
+// Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
+// Every formula mirrors the game's own stat computers and action handlers
+// (decompiled from GamesByMalcs.Melvor2.dll); see README "How the numbers are computed".
 
 export const HOUR = 3_600_000;
-export const THIEVING_STUN_MS = 2000; // ThievingActionComponent.BaseStunInterval
+export const BASE_STUN_MS = 2000; // ThievingActionComponent.BaseStunInterval
 
 export const SKILL_ORDER = [
   'Woodcutting', 'Fishing', 'Mining', 'Thieving', 'Cooking', 'Smithing', 'Crafting', 'Fletching',
   'Runecrafting', 'Herblore', 'Beastcrafting', 'Firemaking', 'Farming',
 ];
 
+const STATS_TYPE = {
+  Woodcutting: 'WoodcuttingAction', Mining: 'MiningAction', Fishing: 'FishingAction', Thieving: 'ThievingAction',
+  Cooking: 'CookingAction', Herblore: 'HerbloreAction', Firemaking: 'FiremakingAction', Farming: 'FarmingAction',
+};
+const statsTypeOf = (skill) => STATS_TYPE[skill] || 'ArtisanAction';
+const STAT_GROUPS = { PercentInterval: 'GlobalPercentActionInterval', FlatInterval: 'GlobalFlatActionInterval' };
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+
+/** Expected value of floor(q * mult) for q uniform on the integers [lo, hi]. */
+function avgFloor(lo, hi, mult) {
+  if (mult === 1) return (lo + hi) / 2;
+  let s = 0;
+  for (let q = lo; q <= hi; q++) s += Math.floor(q * mult);
+  return s / (hi - lo + 1);
+}
+
+/** Expected actions to clear `n` steps when each action has chance k of doing 2 (only while > 1 remain). */
+function stepsWithSkip(n, k, guard = true) {
+  if (k <= 0) return n;
+  const E = [0, 1];
+  for (let h = 2; h <= n; h++) E[h] = 1 + k * E[h - 2] + (1 - k) * E[h - 1];
+  if (!guard && n >= 1) E[1] = 1;
+  return E[n];
+}
+
+/** Woodcutting: expected hits to fell a tree of health H (instant-cut, weak-spot, double-damage). */
+function treeHits(H, instant, weak, dbl) {
+  if (!instant && !weak && !dbl) return H;
+  const weakDmg = 3 + Math.floor(0.1 * H);
+  const E = new Float64Array(H + 1);
+  for (let h = 1; h <= H; h++) {
+    if (h === 1) { E[1] = 1; continue; }
+    const f = (d) => E[Math.max(0, h - d)];
+    const rest = weak * (dbl * f(2 * weakDmg) + (1 - dbl) * f(weakDmg)) + (1 - weak) * (dbl * f(2) + (1 - dbl) * f(1));
+    E[h] = 1 + (1 - instant) * rest;
+  }
+  return E[H];
+}
+
+/** Mining: progress += p per hit or an early break with chance p; guaranteed break at >= 0.9999. */
+function rockHits(p, start = 0) {
+  if (p >= 1) return 1;
+  if (p <= 0) return Infinity;
+  let n = 1;
+  while (start + n * p < 0.9999) n++;
+  let e = 0;
+  for (let i = 1; i < n; i++) e += i * Math.pow(1 - p, i - 1) * p;
+  return e + n * Math.pow(1 - p, n - 1);
+}
+
+function tableEV(rows, mult = 1, fortune = 1) {
+  // rows: [item, weight, min, max] -> Map item -> expected qty per roll
+  const tot = rows.reduce((a, r) => a + r[1], 0) || 1;
+  const out = new Map();
+  for (const [it, w, lo, hi] of rows) out.set(it, (out.get(it) || 0) + (w / tot) * avgFloor(lo, hi, fortune) * mult);
+  return out;
+}
+
 export class Engine {
   constructor(game) {
     this.g = game;
     this.items = game.items;
     this.methods = game.methods;
-    // Which items can be produced repeatably at all (ignoring player levels)?
-    this.producers = new Map(); // item -> [method]
+    this.byId = new Map(this.methods.map((m) => [m.id, m]));
+    this.producers = new Map();
+    this.consumers = new Map();
     for (const m of this.methods) {
-      m.primary = m.out[0]?.[0] ?? null;
+      m.primary = m.x?.p ?? m.out.slice().sort((a, b) => b[1] * this.value(b[0]) - a[1] * this.value(a[0]))[0]?.[0] ?? null;
+      if (m.x && ['cook', 'art', 'herb'].includes(m.x.t)) m.primary = m.x.pr.slice().sort((a, b) => a[2] - b[2])[0]?.[0] ?? m.primary;
       for (const [it] of m.out) {
         if (!this.producers.has(it)) this.producers.set(it, []);
         this.producers.get(it).push(m);
       }
+      for (const [it] of m.in) {
+        if (!this.consumers.has(it)) this.consumers.set(it, []);
+        this.consumers.get(it).push(m);
+      }
     }
-    this.sourceable = new Set([...Object.keys(game.buy)]);
+    this.sourceable = new Set(Object.keys(game.buy));
     let changed = true;
     while (changed) {
       changed = false;
@@ -34,40 +99,164 @@ export class Engine {
       }
     }
     for (const m of this.methods) m.rareInputs = m.in.filter(([it]) => !this.sourceable.has(it)).map(([it]) => it);
+    this.useMods = true;
+    this.setPlayer({ skills: {}, bank: {}, shop: {}, tools: {} });
   }
 
   value(item) { return this.items[item]?.v ?? 0; }
   name(item) { return this.items[item]?.n ?? item; }
 
   // ---------------------------------------------------------------- player
-  setPlayer(p) {
+  setPlayer(p, { extraShop = [], useMods = this.useMods } = {}) {
     this.p = p;
+    this.useMods = useMods;
     this.levels = {};
     for (const [s, v] of Object.entries(p.skills || {})) this.levels[s] = v.level;
     this.bank = p.bank || {};
-    this.shopOwned = p.shop || {};
+    this.shopOwned = { ...(p.shop || {}) };
+    for (const id of extraShop) this.shopOwned[id] = Math.max(1, this.shopOwned[id] || 0);
     this.tools = p.tools || {};
     this._cache = new Map();
+    this._rateCache = new Map();
+    this.computeGuilds(p);
+    // Collect active bonuses: owned shop upgrades + equipped toolbelt items + guild rank rewards.
+    this.sources = [];
+    for (const [sk, gs] of Object.entries(this.guild)) {
+      const gd = this.g.guild[sk];
+      for (const b of gd.bonuses || []) {
+        if (gs.lo >= gs.need(b.rank)) this.sources.push({ kind: 'guild', id: b.id, n: b.n, i: this.g.skills[sk]?.i, b: b.b, skill: sk });
+      }
+    }
+    for (const [id, n] of Object.entries(this.shopOwned)) {
+      const s = this.g.shop[id];
+      if (n > 0 && s?.b) this.sources.push({ kind: 'shop', id, n: s.n, i: s.i, b: s.b });
+    }
+    for (const id of Object.keys(this.tools)) {
+      const it = this.items[id];
+      if (it?.tb) this.sources.push({ kind: 'tool', id, n: it.n, i: it.i, b: it.tb });
+    }
+    this.bIndex = new Map();
+    for (const src of this.sources) {
+      for (const [st, name, v, ctx] of src.b) {
+        const key = st === 'G' ? 'G|' + name : st + '|' + name;
+        if (!this.bIndex.has(key)) this.bIndex.set(key, []);
+        this.bIndex.get(key).push({ v, ctx, src });
+      }
+    }
+  }
+
+  /**
+   * Mastery guild points per skill. Goal and trigger tasks come straight from the save; level,
+   * item-statistic and value-statistic conditions are evaluated; anything else (pets, agility,
+   * astrology) is unknown, so we keep a lower and an upper bound.
+   */
+  computeGuilds(p) {
+    this.guild = {};
+    for (const [sk, gd] of Object.entries(this.g.guild || {})) {
+      const sv = p.guild?.[sk];
+      const done = new Set(sv?.done || []), trig = new Set(sv?.trig || []);
+      let lo = 0, hi = 0, total = 0;
+      for (const [id, t] of Object.entries(gd.tasks)) {
+        const pts = t[0];
+        total += pts;
+        let st = null;
+        if (p.allGuild) st = true;
+        else if (t[1] === 'g') st = done.has(id);
+        else if (t[1] === 't') st = trig.has(id);
+        else if (t[1] === 'l') st = (this.levels[t[2]] ?? 1) >= t[3];
+        else if (t[1] === 'i') st = (p.stats?.items?.[t[2]]?.[t[3]] ?? 0) >= t[4];
+        else if (t[1] === 'v') st = (p.stats?.simple?.[t[2]] ?? 0) >= t[3];
+        if (st) { lo += pts; hi += pts; } else if (st === null) hi += pts;
+      }
+      const need = (rank) => Math.ceil(total * (gd.ranks[rank] ?? 0));
+      const order = Object.entries(gd.ranks).sort((a, b) => a[1] - b[1]).map(([k]) => k);
+      const rankAt = (pts) => order.filter((k) => pts >= need(k)).pop() || order[0];
+      const rank = rankAt(lo);
+      const next = order[order.indexOf(rank) + 1] || null;
+      this.guild[sk] = { lo, hi, total, rank, rankHi: rankAt(hi), next, need, known: !!sv || !!p.allGuild, order };
+    }
+  }
+
+  guildName(skill, rank) {
+    return this.g.guild?.[skill]?.rankNames?.[rank] || String(rank).replace(/([a-z])([A-Z])/g, '$1 $2');
+  }
+
+  /** Clone with extra hypothetical shop purchases (for the upgrade advisor). */
+  withShop(extra) {
+    const e = Object.create(Engine.prototype);
+    Object.assign(e, this);
+    e.setPlayer(this.p, { extraShop: extra, useMods: true });
+    return e;
   }
 
   level(skill) { return this.levels?.[skill] ?? 1; }
+
+  ctxMatch(ctx, m, item) {
+    if (ctx.x) return false;
+    if (ctx.e && ctx.e !== m.s) return false;
+    if (ctx.r && ctx.r !== m.rid) return false;
+    if (ctx.cat && ctx.cat !== m.cat) return false;
+    if (ctx.sub && ctx.sub !== m.sub) return false;
+    if (ctx.loc && ctx.loc !== m.locId) return false;
+    if (ctx.it && ctx.it !== item) return false;
+    if (ctx.cur && ctx.cur !== item) return false;
+    return true;
+  }
+
+  /** Sum of a stat's modifiers that apply to method m (optionally for one product item). */
+  mod(m, name, item = null, st = statsTypeOf(m.s)) {
+    if (!this.useMods) return 0;
+    let v = 0;
+    const list = this.bIndex.get(st + '|' + name);
+    if (list) for (const b of list) if (this.ctxMatch(b.ctx, m, item)) v += b.v;
+    const grp = STAT_GROUPS[name];
+    if (grp) { const gl = this.bIndex.get('G|' + grp); if (gl) for (const b of gl) v += b.v; }
+    return v;
+  }
+
+  /** Which bonus sources touch method m (for the "your upgrades" breakdown). */
+  modSources(m) {
+    if (!this.useMods) return [];
+    const st = statsTypeOf(m.s);
+    const out = new Map();
+    for (const src of this.sources) {
+      for (const [t, name, v, ctx] of src.b) {
+        const okType = t === st || (t === 'Experience' && ctx.e === m.s) || (t === 'G' && STAT_GROUPS[name]);
+        if (!okType) continue;
+        const items = [null, ...m.out.map(([it]) => it), ...(m.x?.cur ? [m.x.cur[0]] : [])];
+        if (t !== 'G' && !items.some((it) => this.ctxMatch(ctx, m, it))) continue;
+        if (!out.has(src)) out.set(src, []);
+        out.get(src).push({ name, v });
+      }
+    }
+    return [...out.entries()].map(([src, fx]) => ({ src, fx }));
+  }
 
   reqStatus(r, levelOverride) {
     switch (r.t) {
       case 'lvl': {
         const have = levelOverride?.[r.s] ?? this.level(r.s);
-        return { ok: have >= r.l, known: true, text: `${r.s} ${r.l}`, gap: Math.max(0, r.l - have), kind: 'lvl' };
+        return { ok: have >= r.l, known: true, text: `${r.s} ${r.l}`, gap: Math.max(0, r.l - have), kind: 'lvl', skill: r.s, need: r.l };
       }
       case 'shop': {
         const n = this.shopOwned[r.id] || 0;
-        return { ok: n >= r.n, known: true, text: this.g.shop[r.id]?.n ?? r.id, kind: 'shop', icon: this.g.shop[r.id]?.i };
+        return { ok: n >= r.n, known: true, text: this.g.shop[r.id]?.n ?? r.id, kind: 'shop', icon: this.g.shop[r.id]?.i, id: r.id };
       }
       case 'tool': {
         const ok = !!(this.tools[r.item] || this.bank[r.item]);
         return { ok, known: true, text: `${this.name(r.item)} equipped`, kind: 'tool', icon: this.items[r.item]?.i };
       }
-      case 'quest': return { ok: true, known: false, text: `Quest: ${r.id}`, kind: 'quest' };
-      case 'rank': return { ok: true, known: false, text: `${r.s} guild rank: ${r.id.replace(/([a-z])([A-Z])/g, '$1 $2')}`, kind: 'rank' };
+      case 'quest': return { ok: true, known: false, text: `Quest: ${r.id.replace(/([a-z])([A-Z0-9])/g, '$1 $2')}`, kind: 'quest' };
+      case 'rank': {
+        const gs = this.guild?.[r.s];
+        const text = this.guildName(r.s, r.id);
+        if (!gs || !gs.known) return { ok: true, known: false, text, kind: 'rank' };
+        const need = gs.need(r.id);
+        if (gs.lo >= need) return { ok: true, known: true, text, kind: 'rank' };
+        if (gs.hi < need) return { ok: false, known: true, text, kind: 'rank', pts: need - gs.lo, skill: r.s };
+        // Can't tell: some of the tasks that would get you there aren't readable from the save.
+        return { ok: true, known: false, text: `${text} (probably)`, kind: 'rank', pts: need - gs.lo, skill: r.s };
+      }
       default: return { ok: true, known: false, text: r.text, kind: 'other' };
     }
   }
@@ -84,23 +273,153 @@ export class Engine {
   }
 
   // ---------------------------------------------------------------- rates
-  /** Per-hour flows for a method at the player's levels. */
+  /** Per-hour flows for a method at the player's levels, with their upgrades applied. */
   rate(m, levelOverride) {
     const lvl = levelOverride?.[m.s] ?? this.level(m.s);
-    let succ = 1;
-    let ms = m.ms;
-    if (m.succ?.t === 'cooking') succ = Math.min(1, Math.max(0, (69 + lvl) / (69 + m.succ.d)));
-    if (m.succ?.t === 'thieving') {
-      succ = Math.min(1, (100 + lvl) / (100 + m.succ.p));
-      ms = m.ms + (1 - succ) * THIEVING_STUN_MS;
+    const key = m.id + '|' + lvl;
+    const c = this._rateCache.get(key);
+    if (c) return c;
+    const r = this._rate(m, lvl);
+    this._rateCache.set(key, r);
+    return r;
+  }
+
+  _rate(m, lvl) {
+    const x = m.x;
+    const M = (name, item) => this.mod(m, name, item);
+    const xpMult = 1 + this.mod(m, 'PercentXPGained', null, 'Experience');
+    const xpFlat = this.mod(m, 'FlatXPGained', null, 'Experience');
+    const outs = new Map();
+    const add = (it, q) => { if (it && q) outs.set(it, (outs.get(it) || 0) + q); };
+    let ins = m.in.map(([it, q]) => [it, q]);
+    let ms = m.ms, xp = m.xp, gp = m.gp, succ = 1, extra = {};
+    const ingCost = (pres) => {
+      const pic = M('PercentIngredientCost');
+      ins = m.in.map(([it, q]) => [it, Math.max(1, Math.floor(q * (1 + pic))) * (1 - pres)]);
+    };
+    const prodQty = (q, it) => Math.max(1, Math.floor((q + M('FlatProductQuantity', it)) * (1 + M('PercentProductQuantity', it))));
+
+    if (!x) {
+      for (const [it, q] of m.out) add(it, q);
+    } else if (x.t === 'wc') {
+      const iv = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
+      const hp = Math.ceil((x.hp + M('FlatMaxHealth')) * (1 + M('PercentMaxHealth')));
+      const hits = treeHits(hp, clamp01(M('InstantCutChance')), clamp01(M('WeakSpotChance')), clamp01(M('DoubleDamageChance')));
+      const d = clamp01(M('DoublingChance'));
+      ms = hits * iv;
+      add(x.p, (x.q + Math.trunc(M('FlatProductQuantity'))) * (1 + d));
+      for (const [it, q, ch] of x.hit) add(it, clamp01((ch + M('FlatOnHitItemChance', it)) * (1 + M('PercentOnHitItemChance', it))) * (q + Math.trunc(M('FlatOnHitItemQuantity', it))) * (1 + d) * hits);
+      for (const [it, q, ch] of x.cut) add(it, clamp01((ch + M('FlatOnCutItemChance', it)) * (1 + M('PercentOnCutItemChance', it))) * (q + Math.trunc(M('FlatOnCutItemQuantity', it))) * (1 + d));
+      extra = { hits, iv, hp };
+    } else if (x.t === 'mine') {
+      const iv = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
+      const p = clamp01(x.pc * (1 + M('PercentIncreaseRockBreakChance')));
+      const hits = rockHits(p, M('FlatMinimumProspecting'));
+      const d = clamp01(M('DoublingChance'));
+      const shatter = clamp01(M('ShatterChance'));
+      ms = hits * iv;
+      add(x.p, (x.q + Math.trunc(M('FlatProductQuantity')) + clamp01(M('AdditionalProductQuantityChance'))) * (1 + d) * (1 + 2 * shatter));
+      xp = m.xp * (1 + shatter);
+      for (const [it, q, ch] of x.hit) add(it, clamp01((ch + M('FlatOnHitItemChance', it)) * (1 + M('PercentOnHitItemChance', it))) * q * (1 + d) * hits);
+      if (x.stone) add(x.stone, clamp01(M('StoneItemChance')) * (1 + d) * hits);
+      if (x.ess) add(x.ess, clamp01(M('EssenceItemChance')) * (1 + d) * hits);
+      if (x.bar) add(x.bar, clamp01(M('BarItemChance')) * (1 + d));
+      extra = { hits, iv, breakChance: p };
+    } else if (x.t === 'fish') {
+      const iv = (v, f, pct) => Math.floor((v + M(f)) * (1 + M(pct)));
+      let lo = iv(x.min, 'FlatMinInterval', 'PercentMinInterval');
+      let hi = iv(x.max, 'FlatMaxInterval', 'PercentMaxInterval');
+      if (hi < lo) hi = lo;
+      ms = (lo + hi) / 2;
+      const fc = clamp01((x.fc + M('FlatFishChance')) * (1 + M('IncreasedFishChance')));
+      const pFish = fc + (1 - fc) * clamp01(M('JunkRerollChance'));
+      const d = clamp01(M('DoublingChance'));
+      for (const [it, q] of tableEV(x.fish)) add(it, q * pFish * (1 + d));
+      if (x.junk && pFish < 1) add(x.junk, (1 - pFish) * (1 + d));
+      const sp = x.sp.map(([it, q, ch]) => [it, q + Math.trunc(M('FlatSpecialProductQuantity')), clamp01(ch + M('FlatSpecialProductChance') + ch * M('IncreasedSpecialProductChance'))]).sort((a, b) => a[2] - b[2]);
+      let miss = 1;
+      const spOut = [];
+      for (const [it, q, ch] of sp) { spOut.push([it, q * ch * miss * (1 + d)]); miss *= 1 - ch; }
+      const again = 1 + (1 - miss) * clamp01(M('SecondSpecialItemChance'));
+      for (const [it, q] of spOut) add(it, q * again);
+      extra = { lo, hi, fishChance: pFish };
+    } else if (x.t === 'thv') {
+      const iv = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
+      const stealth = Math.max(Math.floor((lvl + M('FlatStealth')) * (1 + M('PercentStealth'))), 0);
+      const perc = Math.max(Math.floor((x.perc + M('FlatPerception')) * (1 + M('PercentPerception'))), 0);
+      succ = Math.min(1, (100 + stealth) / (100 + perc));
+      const stun = Math.floor((BASE_STUN_MS + M('FlatStunInterval')) * (1 + M('PercentStunInterval')));
+      const avoid = clamp01(M('StunAvoidanceChance'));
+      ms = iv + (1 - succ) * (1 - avoid) * stun;
+      const stages = Math.max(1, x.st + Math.trunc(M('FlatStages')));
+      const perComplete = stepsWithSkip(stages, clamp01(M('SkipStageChance')), false);
+      const fortune = 1 + (M('FlatFortune') + (succ < 1 ? M('FlatFortuneUnderSuccess') : 0)) / 100;
+      const d = clamp01(M('DoublingChance'));
+      gp = 0;
+      if (x.g && x.g[0] === 'GoldPieces') {
+        const f = M('FlatCurrencyReward'), pc = M('PercentCurrencyReward');
+        const lo = Math.max(0, Math.floor((x.g[1] + f) * (1 + pc))), hi = Math.max(0, Math.floor((x.g[2] + f) * (1 + pc)));
+        gp = succ * clamp01(x.gc * (1 + M('PercentCurrencyLootChance'))) * (lo + hi) / 2;
+      }
+      const cc = clamp01(x.cc * (1 + M('PercentCommonLootChance')));
+      const rc = clamp01(x.rc * (1 + M('PercentRareLootChance')));
+      for (const [it, q] of tableEV(x.common, 1 + d, fortune)) add(it, q * cc * succ);
+      for (const [it, q] of tableEV(x.rare, 1 + d, fortune)) add(it, q * rc * succ);
+      for (const [it, q] of tableEV(x.comp, 1 + d, fortune)) add(it, q * succ / perComplete);
+      xp = (m.xp * x.st) * succ / perComplete; // m.xp is per stage; BaseExperience is per completion
+      extra = { stealth, perception: perc, stun: stun * (1 - avoid), stages, perComplete };
+    } else if (x.t === 'cook') {
+      ms = Math.floor(x.iv * (1 + M('PercentInterval')) + M('FlatInterval'));
+      const prof = Math.max(0, lvl + M('FlatProficiency'));
+      const diff = Math.max(x.diff + M('FlatDifficulty'), 0);
+      succ = clamp01((69 + prof) / (69 + diff));
+      const p = clamp01(M('PreservationChance'));
+      const pres = p + (1 - p) * (1 - succ) * clamp01(M('PreservationChanceOnFail'));
+      ingCost(pres);
+      const d = clamp01(M('DoublingChance'));
+      for (const [it, q, ch] of x.pr) add(it, succ * ch * prodQty(q, it) * (1 + d));
+      xp = m.xp * succ;
+      extra = { proficiency: prof, difficulty: diff, preserve: pres };
+    } else if (x.t === 'art') {
+      const iv = Math.floor(x.iv * (1 + M('PercentInterval')) + M('FlatInterval'));
+      const steps = Math.max(1, x.steps + Math.trunc(M('FlatSteps')));
+      const per = stepsWithSkip(steps, clamp01(M('SkipStepChance')));
+      ms = iv * per;
+      const pres = clamp01(M('PreservationChance'));
+      ingCost(pres);
+      const d = clamp01(M('DoublingChance'));
+      for (const [it, q, ch] of x.pr) add(it, ch * prodQty(q, it) * (1 + d));
+      extra = { iv, steps, stepsTaken: per, preserve: pres };
+    } else if (x.t === 'herb') {
+      const st = (base, nm) => Math.floor(base * (1 + M('Percent' + nm + 'Interval')) + M('Flat' + nm + 'Interval'));
+      const p = st(x.p, 'Preparing'), h = st(x.h, 'Heating'), s = st(x.s, 'Stirring'), b = st(x.b, 'Bottling');
+      ms = (p + h + s) / x.n + b;
+      const pres = clamp01(M('PreservationChance'));
+      ingCost(pres);
+      const d = clamp01(M('DoublingChance'));
+      for (const [it, q, ch] of x.pr) add(it, ch * prodQty(q, it) * (1 + d));
+      extra = { batch: p + h + s + b * x.n, bottles: x.n, preserve: pres };
+    } else if (x.t === 'fm') {
+      ms = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
+      const pres = clamp01(M('PreservationChance'));
+      ingCost(pres);
+      const d = clamp01(M('DoublingChance'));
+      for (const [it, q, ch] of x.pr) add(it, clamp01(ch + M('FlatProductChance', it) + ch * M('IncreasedProductChance', it)) * (q + Math.trunc(M('FlatProductQuantity', it))) * (1 + d));
+      gp = 0;
+      if (x.cur && x.cur[0] === 'GoldPieces') {
+        const q = Math.floor((x.cur[1] + M('FlatCurrencyReward', 'GoldPieces')) * (1 + M('PercentCurrencyReward', 'GoldPieces')));
+        gp = q * (1 + d);
+      }
+      extra = { preserve: pres };
     }
+    ms = Math.max(1, ms);
     const aph = HOUR / ms;
-    const outs = m.out.map(([it, q]) => [it, q * succ * aph]);
-    const ins = m.in.map(([it, q]) => [it, q * aph]);
-    const gp = m.gp * succ * aph;
-    const xp = m.xp * succ * aph;
-    const outValue = outs.reduce((a, [it, q]) => a + q * this.value(it), 0) + gp;
-    return { m, succ, ms, aph, outs, ins, gp, xp, outValue, msPerAction: ms };
+    const outArr = [...outs.entries()].map(([it, q]) => [it, q * aph]);
+    const insArr = ins.map(([it, q]) => [it, q * aph]);
+    const xph = (xp + xpFlat * (x?.t === 'thv' ? succ / (extra.perComplete || 1) : (x?.t === 'cook' ? succ : 1))) * xpMult * aph;
+    const gph = gp * aph;
+    const outValue = outArr.reduce((a, [it, q]) => a + q * this.value(it), 0) + gph;
+    return { m, succ, ms, aph, outs: outArr, ins: insArr, gp: gph, xp: xph, outValue, extra };
   }
 
   buyPrice(item) {
@@ -115,13 +434,11 @@ export class Engine {
   /**
    * Self-sufficient chains (Dinkelbach): each input is either bought from the shop or
    * produced by your own unlocked methods, charging your time at lambda gp/ms.
-   * Returns per-item {gp, t, via} cost decomposition and per-method chain rates.
    */
-  solveChains(unlocked) {
+  solveChains(unlocked = this.unlockedMethods()) {
     const key = 'chains';
     if (this._cache.has(key)) return this._cache.get(key);
     const cand = unlocked.filter((m) => m.k === 'active');
-    // starting lambda: best gathering-only rate
     let lambda = 0;
     for (const m of cand) if (!m.in.length) lambda = Math.max(lambda, this.rate(m).outValue / HOUR);
     let costs = null;
@@ -143,7 +460,6 @@ export class Engine {
   }
 
   itemCosts(cand, lambda) {
-    // cost(i) = gp_i + lambda * t_i, minimised over buy / make. Bellman-Ford style relaxation.
     const costs = new Map();
     for (const it of Object.keys(this.g.buy)) {
       const p = this.buyPrice(it);
@@ -155,18 +471,17 @@ export class Engine {
       for (const m of makers) {
         let gp = 0, t = 0, ok = true;
         const r = this.rate(m);
-        // per action: inputs
-        for (const [it, q] of m.in) {
+        for (const [it, qh] of r.ins) {
           const c = costs.get(it);
           if (!c) { ok = false; break; }
+          const q = qh / r.aph;
           gp += c.gp * q; t += c.t * q;
         }
         if (!ok) continue;
         t += r.ms;
-        const perAction = r.outs.map(([it, q]) => [it, q / r.aph]);
-        const primQ = perAction.find(([it]) => it === m.primary)?.[1] ?? 0;
+        const primQ = (r.outs.find(([it]) => it === m.primary)?.[1] ?? 0) / r.aph;
         if (primQ <= 1e-9) continue;
-        const byproducts = perAction.reduce((a, [it, q]) => a + (it === m.primary ? 0 : q * this.value(it)), 0) + r.gp / r.aph;
+        const byproducts = r.outs.reduce((a, [it, q]) => a + (it === m.primary ? 0 : (q / r.aph) * this.value(it)), 0) + r.gp / r.aph;
         const gpPer = (gp - byproducts) / primQ;
         const tPer = t / primQ;
         const total = gpPer + lambda * tPer;
@@ -191,19 +506,18 @@ export class Engine {
       gpSpent += c.gp * q; tUp += c.t * q;
       steps.push({ item: it, qtyPerHour: q, via: c.via, gp: c.gp * q, t: c.t * q });
     }
-    const totalT = HOUR + tUp; // ms spent per "hour of this method"
+    const totalT = HOUR + tUp;
     const gpPerHour = (r.outValue - gpSpent) * (HOUR / totalT);
     return { gpPerHour, share: HOUR / totalT, gpSpent, upstreamMs: tUp, steps, r };
   }
 
-  /**
-   * Flatten a chain into "where each minute of an hour of play goes" plus shop spend.
-   * Returns { split: [{m, ms}], bought: [{item, qty, gp}], share } scaled to one hour of play.
-   */
+  /** Flatten a chain into "where each minute of an hour of play goes" plus shop spend. */
   chainBreakdown(m, chain) {
-    const { costs } = this.solveChains(this.unlockedMethods());
+    const { costs } = this.solveChains();
     const time = new Map();
     const bought = new Map();
+    const byp = new Map();
+    let bypGp = 0;
     const add = (mm, ms) => time.set(mm, (time.get(mm) || 0) + ms);
     const walk = (item, qty, depth) => {
       const c = costs.get(item);
@@ -217,16 +531,13 @@ export class Engine {
       add(mm, actions * r.ms);
       for (const [it, q] of r.outs) if (it !== mm.primary) byp.set(it, (byp.get(it) || 0) + (q / r.aph) * actions);
       bypGp += (r.gp / r.aph) * actions;
-      for (const [it, q] of mm.in) walk(it, actions * q, depth + 1);
+      for (const [it, q] of r.ins) walk(it, actions * (q / r.aph), depth + 1);
     };
-    const byp = new Map();
-    let bypGp = 0;
     add(m, HOUR);
     for (const [it, q] of chain.r.ins) walk(it, q, 0);
     const s = chain.share;
     const split = [...time.entries()].map(([mm, ms]) => ({ m: mm, ms: ms * s })).sort((a, b) => b.ms - a.ms);
     const boughtList = [...bought.entries()].map(([item, q]) => ({ item, qty: q * s, gp: q * s * (costs.get(item)?.gp ?? 0) }));
-    // final outputs of the hour: the method's own outputs + upstream by-products
     const outs = new Map();
     for (const [it, q] of chain.r.outs) outs.set(it, (outs.get(it) || 0) + q * s);
     for (const [it, q] of byp) outs.set(it, (outs.get(it) || 0) + q * s);
@@ -234,8 +545,8 @@ export class Engine {
   }
 
   /** Inputs valued at their sell price (opportunity cost); shop-only items at shop price. */
-  sellRate(m) {
-    const r = this.rate(m);
+  sellRate(m, levelOverride) {
+    const r = this.rate(m, levelOverride);
     let cost = 0;
     for (const [it, q] of r.ins) {
       const v = this.value(it);
@@ -245,7 +556,7 @@ export class Engine {
     return { gpPerHour: r.outValue - cost, cost, r };
   }
 
-  /** Bank-limited: how long your stock lasts and total profit available. */
+  /** Bank-limited: how long your stock lasts and the total profit available. */
   bankRate(m) {
     const r = this.rate(m);
     let cost = 0;
@@ -269,39 +580,82 @@ export class Engine {
   }
 
   // ---------------------------------------------------------------- views
-  unlockedMethods() {
-    return this.methods.filter((m) => this.status(m).unlocked);
+  unlockedMethods(levelOverride) {
+    if (!levelOverride && this._cache.has('unlocked')) return this._cache.get('unlocked');
+    const out = this.methods.filter((m) => this.status(m, levelOverride).unlocked);
+    if (!levelOverride) this._cache.set('unlocked', out);
+    return out;
   }
 
+  /**
+   * Ranked money makers.
+   *  best  - the better of "from scratch" and "from your bank" for every method
+   *  chain - from scratch (gather or buy every input)
+   *  bank  - only what your bank can fuel
+   *  sell  - value added (inputs at their sell value)
+   */
   ranked(mode, opts = {}) {
-    const unlocked = this.unlockedMethods();
-    const rows = [];
-    if (mode === 'chain') {
-      const { rates } = this.solveChains(unlocked);
-      for (const m of unlocked) {
-        if (m.k === 'passive') continue;
-        const c = rates.get(m.id);
-        if (!c) continue;
-        rows.push({ m, gph: c.gpPerHour, xph: c.r.xp * c.share, chain: c, r: c.r });
+    const key = 'ranked|' + mode + '|' + !!opts.includePassive + '|' + !!opts.sortTotal + '|' + (opts.window || '');
+    let rows = this._cache.get(key);
+    if (!rows) {
+      const unlocked = this.unlockedMethods();
+      rows = [];
+      if (mode === 'chain' || mode === 'best') {
+        const { rates } = this.solveChains(unlocked);
+        for (const m of unlocked) {
+          if (m.k === 'passive') continue;
+          const c = rates.get(m.id);
+          const b = mode === 'best' ? this.bankRate(m) : null;
+          const bankOk = b && b.hours >= 0.25 && b.gpPerHour > 0;
+          if (mode === 'best' && bankOk && (!c || b.gpPerHour > c.gpPerHour)) {
+            rows.push({ m, gph: b.gpPerHour, xph: b.r.xp, bank: b, r: b.r, total: b.total, src: 'bank', chain: c });
+          } else if (c) {
+            rows.push({ m, gph: c.gpPerHour, xph: c.r.xp * c.share, chain: c, r: c.r, src: 'chain', bankAlt: bankOk ? b : null });
+          }
+        }
+      } else if (mode === 'sell') {
+        for (const m of unlocked) {
+          if (m.rareInputs.length && !m.rareInputs.every((it) => this.bank[it])) continue;
+          const s = this.sellRate(m);
+          if (!Number.isFinite(s.gpPerHour)) continue;
+          rows.push({ m, gph: s.gpPerHour, xph: s.r.xp, sell: s, r: s.r, src: 'sell' });
+        }
+      } else if (mode === 'afk') {
+        // One action left running for `window` hours: gathering, or processing bank/shop stock until it runs out.
+        const T = opts.window || 8;
+        for (const m of unlocked) {
+          if (m.k === 'passive') continue;
+          const r = this.rate(m);
+          if (!r.ins.length) {
+            rows.push({ m, gph: r.outValue, xph: r.xp, r, total: r.outValue * T, hours: T, src: 'afk' });
+            continue;
+          }
+          const b = this.bankRate(m);
+          if (b) {
+            const h = Math.min(T, b.hours);
+            if (h * 60 < 1) continue;
+            rows.push({ m, gph: b.gpPerHour, xph: b.r.xp, r: b.r, bank: b, total: b.gpPerHour * h, hours: h, src: 'afk' });
+            continue;
+          }
+          if (r.ins.every(([it]) => Number.isFinite(this.buyPrice(it)))) {
+            const s = this.sellRate(m);
+            rows.push({ m, gph: s.gpPerHour, xph: s.r.xp, r: s.r, sell: s, total: s.gpPerHour * T, hours: T, src: 'afk', shopOnly: true });
+          }
+        }
+        rows.sort((a, b) => b.total - a.total);
+      } else if (mode === 'bank') {
+        for (const m of unlocked) {
+          if (m.k === 'passive') continue;
+          const b = this.bankRate(m);
+          if (!b || b.hours < 1 / 120) continue;
+          rows.push({ m, gph: b.gpPerHour, xph: b.r.xp, bank: b, r: b.r, total: b.total, src: 'bank' });
+        }
       }
-    } else if (mode === 'sell') {
-      for (const m of unlocked) {
-        if (m.rareInputs.length && !m.rareInputs.every((it) => this.bank[it])) continue;
-        const s = this.sellRate(m);
-        if (!Number.isFinite(s.gpPerHour)) continue;
-        rows.push({ m, gph: s.gpPerHour, xph: s.r.xp, sell: s, r: s.r });
-      }
-    } else if (mode === 'bank') {
-      for (const m of unlocked) {
-        if (m.k === 'passive') continue;
-        const b = this.bankRate(m);
-        if (!b || b.hours < 1 / 120) continue;
-        rows.push({ m, gph: b.gpPerHour, xph: b.r.xp, bank: b, r: b.r, total: b.total });
-      }
+      rows = rows.filter((x) => opts.includePassive || x.m.k !== 'passive');
+      if (mode !== 'afk') rows.sort((a, b) => (mode === 'bank' && opts.sortTotal ? b.total - a.total : b.gph - a.gph));
+      this._cache.set(key, rows);
     }
-    const filtered = rows.filter((x) => (opts.includePassive || x.m.k !== 'passive') && (!opts.skill || x.m.s === opts.skill));
-    filtered.sort((a, b) => (mode === 'bank' && opts.sortTotal ? b.total - a.total : b.gph - a.gph));
-    return filtered;
+    return opts.skill ? rows.filter((x) => x.m.s === opts.skill) : rows;
   }
 
   /** Locked methods you are closest to, with their projected rate at the unlock level. */
@@ -318,7 +672,6 @@ export class Engine {
       if (m.rareInputs.length || r.outValue - cost <= 0) continue;
       out.push({ m, gap: st.levelGap, gph: r.outValue - cost, r, missing: st.missing });
     }
-    // per level-gap bucket keep the most lucrative
     const bucket = (g) => (g <= 1 ? 0 : g <= 5 ? 1 : g <= 15 ? 2 : 3);
     out.sort((a, b) => bucket(a.gap) - bucket(b.gap) || b.gph - a.gph);
     return out.slice(0, limit);
@@ -334,7 +687,6 @@ export class Engine {
         if (!m.in.some(([it]) => it === item)) continue;
         const b = this.bankRate(m);
         if (!b || b.gpPerHour <= 0) continue;
-        // profit attributable while this item lasts
         if (!best || b.total > best.b.total) best = { m, b };
       }
       const sellNow = qty * this.value(item);
@@ -355,6 +707,143 @@ export class Engine {
     rows.sort((a, b) => b.total - a.total);
     return { total, rows };
   }
+
+  // ---------------------------------------------------------------- training
+  /** Methods for one skill at a given level, ranked by XP/hr. */
+  trainOptions(skill, level = this.level(skill)) {
+    const lv = { ...this.levels, [skill]: level };
+    const rows = [];
+    for (const m of this.methods) {
+      if (m.s !== skill || m.k === 'passive') continue;
+      const st = this.status(m, lv);
+      if (!st.unlocked) continue;
+      if (m.rareInputs.length && !m.rareInputs.every((it) => this.bank[it])) continue;
+      const s = this.sellRate(m, lv);
+      if (!(s.r.xp > 0)) continue;
+      rows.push({ m, xph: s.r.xp, gph: Number.isFinite(s.gpPerHour) ? s.gpPerHour : -Infinity, r: s.r });
+    }
+    rows.sort((a, b) => b.xph - a.xph);
+    return rows;
+  }
+
+  /**
+   * Fastest path from the current XP to a target level: at every level band use the best
+   * XP/hr method available. Returns segments and the supplies they consume.
+   */
+  planLevel(skill, target, { prefer = 'xp' } = {}) {
+    const cur = this.p.skills?.[skill];
+    let xp = cur?.xp ?? 0;
+    let level = cur?.level ?? 1;
+    const goal = xpForLevel(target);
+    const segs = [];
+    let hours = 0, gp = 0;
+    const supplies = new Map();
+    let guard = 0;
+    while (xp < goal && guard++ < 200) {
+      const opts = this.trainOptions(skill, level);
+      const pick = prefer === 'gp'
+        ? opts.filter((o) => o.gph >= 0).sort((a, b) => b.gph - a.gph)[0] || opts[0]
+        : opts[0];
+      if (!pick) return { segs, hours: Infinity, gp, supplies: [], stuck: level };
+      // run this method until the next level where a better option could appear
+      const nextUnlock = this.methods.filter((m) => m.s === skill && m.lv > level).reduce((a, m) => Math.min(a, m.lv), 100);
+      const stopLevel = Math.min(target, nextUnlock);
+      const stopXp = Math.min(goal, xpForLevel(stopLevel));
+      const need = Math.max(0, stopXp - xp);
+      const h = need / pick.xph;
+      const last = segs[segs.length - 1];
+      if (last && last.m === pick.m) { last.hours += h; last.toLevel = stopLevel; last.xp += need; }
+      else segs.push({ m: pick.m, fromLevel: level, toLevel: stopLevel, hours: h, xp: need, xph: pick.xph, gph: pick.gph });
+      hours += h;
+      gp += pick.gph * h;
+      for (const [it, q] of pick.r.ins) supplies.set(it, (supplies.get(it) || 0) + q * h);
+      xp = stopXp;
+      level = Math.max(level, levelFromXp(xp));
+      if (need === 0 && level < stopLevel) level = stopLevel;
+    }
+    return { segs, hours, gp, supplies: [...supplies.entries()].map(([item, qty]) => ({ item, qty, have: this.bank[item] || 0 })) };
+  }
+
+  // ---------------------------------------------------------------- shop advisor
+  /** Upgrades worth buying next: every unowned shop bonus whose requirements you meet (or nearly). */
+  upgradeAdvice() {
+    if (this._cache.has('advice')) return this._cache.get('advice');
+    const baseBest = new Map();
+    const bestBy = (eng, skill) => {
+      const money = eng.ranked('best', { skill })[0];
+      const train = eng.trainOptions(skill)[0];
+      return { gph: money?.gph ?? 0, xph: train?.xph ?? 0, money, train };
+    };
+    const out = [];
+    const skillsOf = (b) => [...new Set(b.map(([, , , ctx]) => ctx.e).filter((s) => SKILL_ORDER.includes(s)))];
+    for (const [id, s] of Object.entries(this.g.shop)) {
+      if (!s.b || (this.shopOwned[id] || 0) > 0) continue;
+      const skills = skillsOf(s.b);
+      if (!skills.length) continue;
+      const st = s.r.map((r) => this.reqStatus(r));
+      const missing = st.filter((x) => !x.ok);
+      // only show the next tier: allow at most one missing level requirement, no missing purchases
+      if (missing.some((x) => x.kind !== 'lvl')) continue;
+      const gap = missing.reduce((a, x) => Math.max(a, x.gap || 0), 0);
+      if (gap > 10) continue;
+      const gpCost = (s.cost.find(([c]) => c === 'GoldPieces')?.[1]) || 0;
+      const otherCur = s.cost.filter(([c]) => c !== 'GoldPieces');
+      const itemCost = s.ci.reduce((a, [it, q]) => a + q * this.value(it), 0);
+      const alt = this.withShop([id]);
+      let dGp = 0, dXp = 0, skill = skills[0], before = null, after = null;
+      for (const sk of skills) {
+        if (!baseBest.has(sk)) baseBest.set(sk, bestBy(this, sk));
+        const b0 = baseBest.get(sk), b1 = bestBy(alt, sk);
+        const g = b1.gph - b0.gph, x = b0.xph > 0 ? (b1.xph - b0.xph) / b0.xph : 0;
+        if (g > dGp || (dGp === 0 && x > dXp)) { dGp = Math.max(dGp, g); skill = sk; before = b0; after = b1; }
+        dXp = Math.max(dXp, x);
+      }
+      const totalCost = gpCost + itemCost;
+      out.push({
+        id, s, skills, skill, missing, gap, gpCost, itemCost, otherCur, totalCost,
+        dGp, dXp, before, after, payback: dGp > 0 ? totalCost / dGp : Infinity,
+        affordable: gpCost <= (this.p.wallet?.GoldPieces ?? this.p.header?.gp ?? 0) && s.ci.every(([it, q]) => (this.bank[it] || 0) >= q),
+      });
+    }
+    out.sort((a, b) => (a.gap > 0) - (b.gap > 0) || (b.dGp > 0) - (a.dGp > 0) || a.payback - b.payback || b.dXp - a.dXp);
+    this._cache.set('advice', out);
+    return out;
+  }
+
+  // ---------------------------------------------------------------- items
+  /** Everything about one item: where it comes from, what it makes, what it's worth to you. */
+  itemInfo(item) {
+    const it = this.items[item];
+    if (!it) return null;
+    const unlocked = new Set(this.unlockedMethods().map((m) => m.id));
+    const sources = (this.producers.get(item) || []).map((m) => {
+      const r = this.rate(m);
+      const per = r.outs.find(([i]) => i === item)?.[1] ?? 0;
+      return { m, perHour: per, unlocked: unlocked.has(m.id) };
+    }).sort((a, b) => (b.unlocked - a.unlocked) || b.perHour - a.perHour);
+    const uses = (this.consumers.get(item) || []).map((m) => ({ m, unlocked: unlocked.has(m.id), s: this.sellRate(m) }))
+      .sort((a, b) => (b.unlocked - a.unlocked) || b.s.gpPerHour - a.s.gpPerHour);
+    const buy = this.g.buy[item] ? { price: this.g.buy[item].p, shop: this.g.shop[this.g.buy[item].shop] } : null;
+    const costs = this.solveChains().costs.get(item);
+    const tool = it.tb ? it.tb : null;
+    return { item, it, have: this.bank[item] || 0, equipped: !!this.tools[item], value: it.v, sources, uses, buy, cost: costs, tool };
+  }
+}
+
+// ---------------------------------------------------------------- xp table
+// StandardExperienceTable.Default: scaling .25, exponentScaling 300, base 2^(1/7)
+const XP_TABLE = (() => {
+  const t = [0];
+  let sum = 0;
+  const base = Math.pow(2, 1 / 7);
+  for (let i = 1; i < 200; i++) { sum += Math.floor(i + 300 * Math.pow(base, i)); t.push(Math.floor(0.25 * sum)); }
+  return t;
+})();
+export const xpForLevel = (lvl) => (lvl <= 1 ? 0 : XP_TABLE[Math.min(lvl, 199) - 1]);
+export function levelFromXp(xp, cap = 99) {
+  let l = 1;
+  while (l < cap && xp >= XP_TABLE[l]) l++;
+  return l;
 }
 
 // ---------------------------------------------------------------- formatting
@@ -378,6 +867,7 @@ export function fmtDuration(hours) {
   if (mins < 1) return '<1m';
   if (mins < 60) return Math.round(mins) + 'm';
   if (hours < 48) { const h = Math.floor(hours); const m = Math.round((hours - h) * 60); return m ? `${h}h ${m}m` : `${h}h`; }
+  if (hours < 24 * 60) { const d = Math.floor(hours / 24); const h = Math.round(hours - d * 24); return h ? `${d}d ${h}h` : `${d}d`; }
   return Math.round(hours / 24) + 'd';
 }
 export function fmtMs(ms) {
@@ -385,3 +875,4 @@ export function fmtMs(ms) {
   if (ms >= 60000) return (ms / 60000).toFixed(1).replace(/\.0$/, '') + 'm';
   return (ms / 1000).toFixed(ms < 10000 ? 2 : 1).replace(/\.?0+$/, '') + 's';
 }
+export function fmtPct(x, d = 0) { return (x * 100).toFixed(d) + '%'; }

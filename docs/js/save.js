@@ -2,9 +2,11 @@
 // Save string = Base64( Brotli( SaveWriter stream ) ). The game flushes the Brotli
 // stream without closing it, so the stream is "truncated" by design: we decode
 // with a streaming decoder and accept NeedsMoreInput at the end.
-import initBrotli, { DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js';
+import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611241056';
 
 let brotliReady = null;
+/** For Node tests: initialise the decoder from wasm bytes instead of fetching it. */
+export function initBrotliSync(wasmBytes) { initSync({ module: wasmBytes }); brotliReady = Promise.resolve(); }
 const ensureBrotli = () => (brotliReady ??= initBrotli({ module_or_path: new URL('./vendor/brotli_dec_wasm_bg.wasm', import.meta.url) }));
 
 export const MIN_SUPPORTED_VERSION = 25; // Alpha 0.11.0+
@@ -154,6 +156,63 @@ function readToolbelt(bytes, comp, into) {
   }
 }
 
+/** MasteryGuildComponent: per task, saved goal progress and whether its trigger fired. */
+function readGuild(bytes, comp) {
+  const r = new Reader(bytes, comp.pos);
+  if (r.bool()) r.str(); // selected category
+  const n = r.i32();
+  const done = [];
+  const trig_ = [];
+  const progress = {};
+  for (let i = 0; i < n; i++) {
+    const id = short(r.str());
+    const len = r.i32();
+    const end = r.p + len;
+    let complete = false;
+    if (r.bool()) {
+      r.str(); // goal id
+      const l2 = r.i32();
+      const e2 = r.p + l2;
+      const p = r.f64();
+      complete = r.bool();
+      if (p > 0) progress[id] = p;
+      r.p = e2;
+    }
+    const trig = r.bool();
+    if (complete) done.push(id);
+    if (trig) trig_.push(id);
+    r.p = end;
+  }
+  return { done, trig: trig_, progress };
+}
+
+/** StatisticsComponent: simple values, then per-item and per-currency dictionaries. */
+function readStatistics(bytes, comp, into) {
+  const r = new Reader(bytes, comp.pos);
+  const end = comp.pos + comp.len;
+  const n = r.i32();
+  for (let i = 0; i < n; i++) {
+    const id = short(r.str());
+    const len = r.i32();
+    const e = r.p + len;
+    if (len >= 8) into.simple[id] = r.f64();
+    r.p = e;
+  }
+  for (const kind of ['items', 'currencies']) {
+    if (r.p >= end) break;
+    const m = r.i32();
+    for (let i = 0; i < m; i++) {
+      const id = short(r.str());
+      const len = r.i32();
+      const e = r.p + len;
+      const cnt = r.i32();
+      const map = (into[kind][id] ||= {});
+      for (let k = 0; k < cnt; k++) { const v = r.f64(); map[short(r.str())] = v; }
+      r.p = e;
+    }
+  }
+}
+
 // StandardExperienceTable.Default: scaling .25, exponentScaling 300, base 2^(1/7)
 const XP_TABLE = (() => {
   const t = [0];
@@ -203,5 +262,14 @@ export async function decodeSave(input) {
   for (const comps of Object.values(ents)) {
     if (comps.Toolbelt) { try { readToolbelt(raw, comps.Toolbelt, tools); } catch { /* tolerate */ } }
   }
-  return { header, skills, bank, wallet, shop, tools, entities: Object.keys(ents) };
+  const guild = {};
+  const stats = { simple: {}, items: {}, currencies: {} };
+  for (const [id, comps] of Object.entries(ents)) {
+    if (comps.MasteryGuild) { try { guild[id] = readGuild(raw, comps.MasteryGuild); } catch { /* tolerate */ } }
+    for (const [cid, c] of Object.entries(comps)) {
+      if (/Statistics$/.test(cid)) { try { readStatistics(raw, c, stats); } catch { /* tolerate */ } }
+    }
+  }
+  const components = Object.fromEntries(Object.entries(ents).map(([k, v]) => [k, Object.keys(v)]));
+  return { header, skills, bank, wallet, shop, tools, guild, stats, entities: Object.keys(ents), components };
 }

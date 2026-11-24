@@ -1,21 +1,25 @@
 # Melvor Ledger
 
-A money planner for **Melvor Idle 2**. Paste the save string from the game's main menu (*Copy save string to clipboard*) and see every way your account can make gold, ranked by GP per hour.
+A companion for **Melvor Idle 2**. Paste the save string from the game's main menu (*Copy save string to clipboard*). It reads your levels, shop upgrades, equipped tools, mastery guild progress and bank, then tells you what to do next: the best money makers, the fastest route to any level, and which upgrade pays for itself first.
 
 **Live site: https://zootzootzoot.github.io/melvor2/**
 
-Everything runs in the browser. Your save is decoded locally and never uploaded. The last import is kept in `localStorage` on your own device.
+Everything runs in the browser. Your save is decoded locally and never uploaded. The last import, and a small history of previous imports used for "since last time" progress, stay in `localStorage` on your own device.
 
 ## Features
 
-- **Money makers**, with three pricing modes:
-  - **From scratch.** Full production chains. Each input is either gathered by you (the time counts) or bought from the shop, whichever is cheaper. The expanded row shows where each minute of the hour goes.
-  - **Value added.** Inputs are priced at their sell value, so the number is pure processing profit.
-  - **From my bank.** Only what your current bank can fuel, how long it lasts, and the total profit.
-- **Bank alchemy.** For every stack: sell it now, or what to process it into first, and how much extra that earns.
-- **Your bank.** Value of every stack, with sorting and search.
-- **Next unlocks.** The most lucrative methods you're a few levels away from.
-- **Explore at 99.** A sandbox for browsing without a save.
+- **Money makers.** Every method ranked by gold per hour. Open any row for the full per-hour ledger, the production chain and which of your upgrades affect it. There are five views:
+  - **Best overall** (default). For each method, whichever pays more: from scratch, or from what's already in your bank.
+  - **From scratch.** Full production chains. Each input is gathered by you (its time counts) or bought from the shop, whichever is cheaper. Shows where each minute of the hour goes.
+  - **From your bank.** Only what your current bank can fuel, how long it lasts, and the total profit.
+  - **Leave it running.** Single actions to leave going for 1 to 24 hours (gathering, or working through your bank), ranked by total gold over that time. Accounts for stock running out.
+  - **Value added.** The best crafts, with inputs priced at their sell value.
+- **Training.** For each skill: the fastest route to a target level, switching methods as better ones unlock. Shows total time, the gold it makes or costs, and the supplies it needs against what you have. Also lists every way to train the skill at any level, plus your mastery guild rank and what the next rank unlocks.
+- **Upgrades.** Every shop upgrade you can buy next, priced against what it earns. Each card shows the gain in gold/hr and XP/hr on your best method for that skill, the payback time, and whether you can afford it now. Also lists every upgrade you own and what it does.
+- **Bank.** *Process first* shows what to turn each stack into before selling, and how much extra that earns. *Everything* shows your bank's value, with sorting and search.
+- **Next unlocks.** The most lucrative methods you're a few levels away from, with the XP and estimated time to get there.
+- **Item lookup** (Ctrl K, or click any item icon). Where an item comes from, what it's used for, its value, how much you have, and what it does when equipped.
+- **Explore at 99.** A sandbox with every skill at 99 and every upgrade, for browsing without a save.
 
 ## Layout
 
@@ -23,13 +27,15 @@ Everything runs in the browser. Your save is decoded locally and never uploaded.
 docs/                 the static site (GitHub Pages serves this folder)
   index.html
   css/app.css
-  js/app.js           UI
-  js/engine.js        rates, chain solver, bank analysis
+  js/app.js           UI: views, routing, drawer, search
+  js/ui.js            shared helpers, bonus text
+  js/engine.js        rates with modifiers, chain solver, training planner, upgrade advisor
   js/save.js          save-string decoder
   js/vendor/          brotli-dec-wasm (MIT/Apache-2.0), streaming Brotli decoder
   data/game.json      generated from the game install
   icons/*.webp        generated from the game install
 tools/build_data.py   regenerates data/ and icons/ from your local Melvor2.exe
+tools/bump_version.py stamps cache-busting ?v= on script/style URLs (run before deploying)
 tools/test/           node smoke test against a real save
 ```
 
@@ -38,9 +44,19 @@ tools/test/           node smoke test against a real save
 ```powershell
 python -I tools/build_data.py "C:\Program Files (x86)\Steam\steamapps\common\Melvor Idle 2\Melvor2.exe"
 node tools/test/engine.test.mjs path\to\save_xxx.sav
+python -I tools/bump_version.py
 ```
 
-The script finds the Godot pack embedded in `Melvor2.exe` (format v4, unencrypted). It reads `Data/Packages/MelvorBase.json` for items, recipes and the shop, and unwraps item icons from Godot `GST2` textures. Those textures hold lossless WebP data.
+The script finds the Godot pack embedded in `Melvor2.exe` (format v4, unencrypted) and reads `Data/Packages/MelvorBase.json` from it. It extracts:
+
+- items, recipes and the shop;
+- each recipe's raw parameters;
+- every shop-upgrade and toolbelt bonus;
+- mastery guild tasks, ranks and rank rewards.
+
+It also unwraps item icons from Godot `GST2` textures, which hold lossless WebP data.
+
+Only shop purchases registered in the Shop entity config count as buyable. Some purchases are defined in the data but never sold.
 
 ## Save format (Alpha 0.11.5.5, save version 31)
 
@@ -55,28 +71,40 @@ The script finds the Godot pack embedded in `Melvor2.exe` (format v4, unencrypte
     - `Shop/Shop`: purchase counts.
     - `<Skill>/Experience`: `double xp`.
     - `<Skill>/Toolbelt`: equipped tools.
+    - `<Skill>/MasteryGuild`: `bool hasCategory [string]`, `int32 n`, then per task `string id` plus a region. The region holds `bool hasGoal [string goalId, region{double progress, bool complete, bool active}]` and `bool triggerMet`.
+    - `*/Statistics`: simple values (`string id`, region `double`), then item and currency tables (`string stat`, region `int32 n × (double value, string item)`).
 - Levels use the game's `StandardExperienceTable(0.25, 300, 2^(1/7))`, capped at 99.
 
 ## How the numbers are computed
 
-These are base rates from the game's own formulas. Tool, mastery, potion, pet and astrology modifiers are not applied yet.
+Rates use the game's own stat computers and action handlers, with your bonuses applied. Bonuses come from:
+
+- owned shop upgrades;
+- equipped toolbelt items;
+- mastery guild rank rewards.
+
+Each bonus applies where its context matches: skill, recipe, category, subcategory, product item or fishing location. Potion, pet, astrology and agility bonuses are not applied yet.
 
 | Skill | Model |
 |---|---|
-| Woodcutting | One log per tree "cut" of `BaseMaxHealth` hits at `BaseInterval`. Per-hit drops roll every hit. |
-| Mining | Each hit breaks the rock with chance `p`, otherwise progress += `p`. The rock always breaks once progress ≥ 0.9999. The expected number of hits is computed exactly. |
-| Fishing | Uniform interval `(min+max)/2`. Fish vs junk by `FishChance`, weighted fish table. Special items roll in ascending-chance order and the first success wins. |
-| Thieving | Success = `min(1, (100+level)/(100+perception))`. Each failure adds a 2 s stun. Currency, common and rare tables give their expected values. |
-| Cooking | Success = `clamp((69+level)/(69+difficulty))`. Ingredients are spent on failure. |
-| Smithing, Crafting, Fletching, Runecrafting, Beastcrafting | `BaseInterval × Steps` per craft. Each product rolls independently by its chance. |
-| Herblore | Preparing + heating + stirring + bottling intervals per batch. |
-| Farming | Passive, per plot. |
+| Woodcutting | Interval `⌊(base + flat) × (1 + %)⌋`. Expected hits to fell a tree are computed exactly, including double-damage, weak-spot and instant-cut chances. Per-hit and per-log drops scale with doubling chance. |
+| Mining | Rock break chance `p = base × (1 + %)`. Each hit breaks early with chance `p`, otherwise progress += `p`, with a guaranteed break at ≥ 0.9999 (starting from minimum prospecting). Expected hits are exact. Ore quantity includes the +1 chance, doubling and shatter (3× ore, 2× XP). |
+| Fishing | Uniform interval between the modified min and max. Fish vs junk by fish chance (plus junk reroll). Weighted fish table, doubling. Special items roll in ascending-chance order and the first success wins, with a second roll if you have that bonus. |
+| Thieving | Stealth `⌊(level + flat) × (1 + %)⌋`. Success = `min(1, (100+stealth)/(100+perception))`. Failures add the stun interval unless avoided. Loot uses fortune (`⌊q × (1 + F/100)⌋`, averaged exactly) and doubling. XP and completion drops come once per completed set of stages, with stage skipping. |
+| Cooking | Success = `clamp((69 + proficiency)/(69 + difficulty))`. Ingredients are spent on failure unless preserved. |
+| Smithing, Crafting, Fletching, Runecrafting, Beastcrafting | Interval × expected actions per craft (steps with skip-step chance). Preservation reduces ingredient use. Doubling and flat/percent quantity apply per product. |
+| Herblore | One brew is prepare + heat + stir, then **10 bottlings**. Each bottling spends ingredients and yields products + XP, so time per potion = `(prepare + heat + stir)/10 + bottling`. |
+| Firemaking | Interval, preservation, by-product chances, and currency rewards with doubling. |
+| Farming | Passive, per plot (base rates). |
 
-The **From scratch** mode uses a Dinkelbach-style fixed point. Your time is valued at the best rate you can reach (λ gp/ms). Each item's cost is then `min(shop price, Σ input costs + λ·time − by-product value)`, relaxed until it stops changing. Each method's chain rate is `(output value − gold spent) / total time`.
+- **From scratch** uses a Dinkelbach-style fixed point. Your time is valued at the best rate you can reach (λ gp/ms). Each item's cost is then `min(shop price, Σ input costs + λ·time − by-product value)`, relaxed until it stops changing.
+- **Mastery guild ranks** come from task points. Goal and trigger tasks are read from the save. Level, item-statistic and value-statistic conditions are evaluated. Anything else counts toward an upper bound only, and a requirement that falls between the bounds shows as "probably".
+- **Training plans** step through level bands. In each band they use the best XP/hr (or gold/hr) method available, re-evaluating whenever a new method unlocks.
+- **Upgrade advice** re-runs the whole engine with the upgrade added. It compares your best money maker and best XP/hr in that skill before and after.
 
 ## Deploying
 
-GitHub Pages: **Settings → Pages → Deploy from a branch → `main` / `docs`**.
+GitHub Pages: **Settings → Pages → Deploy from a branch → `main` / `docs`**. Run `tools/bump_version.py` before each deploy, so returning visitors don't mix cached modules.
 
 ## Disclaimer
 

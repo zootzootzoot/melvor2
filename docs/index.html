@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Melvor Ledger — money planner for Melvor Idle 2</title>
-  <meta name="description" content="Paste your Melvor Idle 2 save string and see every way your account can make gold, ranked by GP per hour." />
+  <title>Melvor Ledger — Melvor Idle 2 companion</title>
+  <meta name="description" content="Paste your Melvor Idle 2 save string: money makers ranked by GP per hour, the fastest route to any level, and which shop upgrade pays for itself first." />
   <meta name="theme-color" content="#0c0d12" />
   <link rel="icon" href="icons/Currencies_GoldPieces.webp" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650;9..144,800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/app.css" />
-  <link rel="modulepreload" href="js/app.js" />
+  <link rel="stylesheet" href="css/app.css?v=202611241056" />
+  <link rel="modulepreload" href="js/app.js?v=202611241056" />
 </head>
 <body>
   <div class="bg" aria-hidden="true"><div class="bg-glow"></div><div class="bg-grain"></div></div>
@@ -28,11 +28,13 @@
   <main id="app" aria-live="polite"></main>
 
   <footer class="footer">
-    <p>Base rates from the game's own data and formulas (<span id="game-version">Alpha 0.11.5.5</span>). Tool, mastery, potion and pet bonuses are not applied yet, so real rates are usually higher.</p>
-    <p>Fan-made and unofficial. Not affiliated with Games by Malcs. Your save is decoded in your browser and never uploaded.</p>
+    <p>Rates use the game's own data and formulas (<span id="game-version">Alpha 0.11.5.5</span>), including your shop upgrades and equipped tools. Mastery guild, potion, pet and astrology bonuses are not applied yet.</p>
+    <p>Fan-made and unofficial. Not affiliated with Games by Malcs. Your save is decoded in your browser and never uploaded. Press <span class="kbd">Ctrl K</span> to search any item.</p>
   </footer>
 
+  <dialog class="drawer" id="drawer" aria-label="Item details" tabindex="-1"></dialog>
+  <dialog class="palette" id="palette" aria-label="Search items"></dialog>
   <div class="toast" id="toast" role="status" hidden></div>
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/app.js?v=202611241056"></script>
 </body>
 </html>
