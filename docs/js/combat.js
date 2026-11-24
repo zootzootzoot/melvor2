@@ -103,3 +103,9 @@ export function dropsPerKill(e) {
   const gp = e.drops.gp ? (e.drops.gp[0] + e.drops.gp[1]) / 2 : 0;
   return { items: [...out.entries()], gp };
 }
+
+/** Which save slot an equipment type goes in (rings fill the free ring slot first). */
+export function SLOT_OF(type, eq = {}) {
+  if (type === 'Ring') return !eq.RingSlot1 ? 'RingSlot1' : !eq.RingSlot2 ? 'RingSlot2' : 'RingSlot1';
+  return ['Helmet', 'Cape', 'Amulet', 'Ammo', 'Weapon', 'Torso', 'Offhand', 'Legs', 'Gloves', 'Boots'].includes(type) ? type : null;
+}

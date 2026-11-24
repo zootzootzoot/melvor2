@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill } from './combat.js?v=202611241139';
+import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF } from './combat.js?v=202611241140';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -1173,6 +1173,61 @@ export class Engine {
     }
     out.sort((a, b) => b.net - a.net || b.dXp - a.dXp);
     this._cache.set('potions', out);
+    return out;
+  }
+
+  /**
+   * Combat gear you could equip and get (bank, craft, or shop) that raises your best combat gold/hr.
+   * Screens every candidate on the enemy you farm best, then re-ranks all of combat for the top few per slot.
+   */
+  gearAdvice() {
+    if (this._cache.has('gear')) return this._cache.get('gear');
+    const C = this.g.combat;
+    const out = [];
+    const base = this.ranked('chain', { skill: 'Combat' })[0];
+    if (!C || !this.fighter || !base) { this._cache.set('gear', out); return out; }
+    const eqNow = this.p.equipment || {};
+    const makeable = new Map();
+    for (const m of this.unlockedMethods()) if (m.s !== 'Combat') for (const [it] of m.out) if (!makeable.has(it) || m.primary === it) makeable.set(it, m);
+    const enemy = enemyFighter(C.enemies[base.m.rid]);
+    const f0 = fight(C, this.fighter, enemy);
+    const withGear = (slot, item) => {
+      const eq = { ...eqNow, [slot]: { item, qty: 1 } };
+      for (const o of this.items[item].eq.occ || []) delete eq[o];
+      if (slot === 'Offhand' && eqNow.Weapon && (this.items[eqNow.Weapon.item]?.eq?.occ || []).includes('Offhand')) return null;
+      return { ...this.p, equipment: eq };
+    };
+    const bySlot = new Map();
+    for (const [id, it] of Object.entries(this.items)) {
+      const e = it.eq;
+      const slot = e && SLOT_OF(e.slot, eqNow);
+      if (!slot || eqNow[slot]?.item === id || slot === 'Ammo') continue;
+      if (!e.r.every((q) => this.reqStatus(q).ok)) continue;
+      const src = this.bank[id] > 0 ? 'bank' : makeable.has(id) ? 'make' : Number.isFinite(this.buyPrice(id)) ? 'buy' : null;
+      if (!src) continue;
+      const p2 = withGear(slot, id);
+      if (!p2) continue;
+      const f1 = fight(C, playerFighter(this.g, p2), enemy);
+      if (!f1 || !f0) continue;
+      const score = f0.killMs / f1.killMs + (f0.takenPerKill - f1.takenPerKill) / Math.max(1, f0.takenPerKill) * 0.25;
+      if (score <= 1.005) continue;
+      if (!bySlot.has(slot)) bySlot.set(slot, []);
+      bySlot.get(slot).push({ id, src, score, p2, f1 });
+    }
+    for (const [slot, list] of bySlot) {
+      for (const c of list.sort((a, b) => b.score - a.score).slice(0, 2)) {
+        const alt = Object.create(Engine.prototype);
+        Object.assign(alt, this);
+        alt.setPlayer(c.p2, { useMods: this.useMods });
+        const best = alt.ranked('chain', { skill: 'Combat' })[0];
+        const dGp = (best?.gph ?? 0) - base.gph;
+        if (dGp <= 0) continue;
+        out.push({ slot, id: c.id, it: this.items[c.id], cur: eqNow[slot]?.item || null, src: c.src, via: makeable.get(c.id) || null, price: this.buyPrice(c.id),
+          dGp, before: base, after: best, killBefore: f0.killMs, killAfter: c.f1.killMs, takenBefore: f0.takenPerKill, takenAfter: c.f1.takenPerKill });
+      }
+    }
+    out.sort((a, b) => b.dGp - a.dGp);
+    this._cache.set('gear', out);
     return out;
   }
 

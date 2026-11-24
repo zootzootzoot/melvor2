@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241139';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241139';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241139';
+import { decodeSave } from './save.js?v=202611241140';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241140';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241140';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -868,11 +868,31 @@ function viewUpgrades() {
     <div class="seg" role="group" aria-label="Filter"><button data-upfilter="all" aria-pressed="${state.upFilter === 'all'}">All</button><button data-upfilter="now" aria-pressed="${state.upFilter === 'now'}">Can buy now</button></div>
   </div>
   ${list.length ? `<div class="up-grid stagger">${list.map(card).join('')}</div>` : `<div class="empty"><b>Nothing new within reach.</b>You own every skilling upgrade you currently qualify for.</div>`}
+  ${gearSection()}
   ${potionSection()}
   <details class="owned">
     <summary><b>Upgrades you own</b> <span class="muted">${owned.length} active · already counted in every rate</span></summary>
     <div class="owned-grid">${owned.map((o) => `<div class="owned-item">${img(o.i || itemIcon(o.id), '', 24)}<div><b>${esc(o.n)}</b><span>${o.b.map((b) => { const t = bonusText(b, lookup); return `${t.val} ${esc(t.label)}${t.where ? ` (${esc(t.where)})` : ''}`; }).join(' · ')}</span></div>${o.kind === 'tool' ? '<span class="pill">equipped</span>' : ''}</div>`).join('')}</div>
   </details>`;
+}
+
+function gearSection() {
+  const e = E();
+  const list = e.gearAdvice();
+  if (!list.length) return '';
+  const g = G();
+  return `<div class="section-sub" style="margin-top:26px"><h4>Combat gear worth getting</h4><span class="muted" style="font-size:13px">Gear you can equip now and can get from your bank, by crafting, or from the shop, measured on your best combat money maker from scratch.</span></div>
+  <div class="pot-list stagger">${list.map((x) => {
+    const src = x.src === 'bank' ? '<span class="pill green">in your bank</span>' : x.src === 'make' ? `<span class="pill">make: ${esc(x.via?.s || '')} · ${esc(x.via?.n || '')}</span>` : `<span class="pill">shop · ${fmtGp(x.price)}</span>`;
+    return `<div class="pot-row gear-row" data-item="${esc(x.id)}">
+      ${img(x.it.i, '', 32)}
+      <div class="title"><b>${esc(x.it.n)}</b><span class="sub">${esc(x.slot.replace(/Slot\d/, ''))}${x.cur ? `<span class="sep">·</span>replaces ${esc(g.items[x.cur]?.n || x.cur)}` : '<span class="sep">·</span>empty slot'}</span></div>
+      ${src}
+      <div class="pot-k"><small>kill time</small><b class="num">${fmtMs(x.killAfter)}</b></div>
+      <div class="pot-k"><small>damage taken</small><b class="num ${x.takenAfter < x.takenBefore ? 'green' : ''}">${x.takenBefore > 0 ? fmtPct(x.takenAfter / x.takenBefore - 1, 0) : '—'}</b></div>
+      <div class="pot-k"><small>best combat</small><b class="num gold">+${fmtGp(x.dGp)}/hr</b></div>
+    </div>`;
+  }).join('')}</div>`;
 }
 
 function potionSection() {

@@ -238,6 +238,7 @@ def main():
                 "pow": sum(x["Value"] for x in st.get("PowerRatings") or []),
                 "prot": sum(x["Value"] for x in st.get("ProtectionRatings") or []),
                 "ammo": short(eq.get("AmmoType")),
+                "occ": [short(x) for x in eq.get("OccupiesSlots") or []],
                 "r": reqs_of(eq.get("Requirements")),
             }
         wp = caps.get(NS + "Weapon")

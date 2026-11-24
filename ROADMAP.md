@@ -14,10 +14,12 @@ What players would pay for, ordered by value versus effort. Done items stay list
 - Pets: bonuses from found pets, expected time to each pet, pet guild tasks; potion advisor (net gain after potion cost)
 - Better money within reach: unlocks that beat your best rate, with levels and training time (Next unlocks + Money makers banner)
 - Combat money makers (v1): every enemy from your gear and levels, with hit chance, kill time, damage taken costed as food, drops and gold
+- Combat gear advice: equippable gear from bank, crafting or shop that raises your best combat rate
+- Training counts input gathering/crafting time and XP from intermediate steps; thieving and combat food costs
 - Guild task planner: every task with live progress, time estimates, and the fastest set of tasks to the next rank (in Training)
 
 ## Up next, in order
-1. **Combat, part 2.** Slayer tasks and coins, dungeons, combat XP training plans, gear upgrade advice (which weapon or armour piece raises your best kill rate), magic spells and special attacks.
+1. **Combat, part 2.** Slayer tasks and coins, dungeons, combat XP training plans (Attack/Strength/Defence/Ranged/Magic routes), magic spells and special attacks.
 2. **More bonus sources.** Agility obstacles and astrology nodes.
 3. **Farming planner.** Per-plot profit per growth cycle with compost, the best crop for each plot type, and a timer-aware schedule.
 4. **Completion tracker.** Items found versus all items, from the save's statistics, with where to get each missing one.
