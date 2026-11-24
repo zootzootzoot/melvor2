@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill } from './combat.js?v=202611241138';
+import { playerFighter, enemyFighter, fight, dropsPerKill } from './combat.js?v=202611241139';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -505,6 +505,11 @@ export class Engine {
       for (const [it, q] of tableEV(x.rare, 1 + d, fortune)) add(it, q * rc * succ);
       for (const [it, q] of tableEV(x.comp, 1 + d, fortune)) add(it, q * succ / perComplete);
       xp = (m.xp * x.st) * succ / perComplete; // m.xp is per stage; BaseExperience is per completion
+      // failed attempts hit you for 1..Damage (DamagePlayer), which costs food
+      if (m.dmg > 0 && this.food && succ < 1) {
+        const taken = (1 - succ) * (1 - clamp01(M('DamageAvoidanceChance'))) * (1 + m.dmg) / 2;
+        ins = [[this.food, taken / this.items[this.food].heal]];
+      }
       extra = { stealth, perception: perc, stun: stun * (1 - avoid), stages, perComplete };
     } else if (x.t === 'cook') {
       ms = Math.floor(x.iv * (1 + M('PercentInterval')) + M('FlatInterval'));

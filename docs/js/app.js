@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241138';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241138';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241138';
+import { decodeSave } from './save.js?v=202611241139';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241139';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241139';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -554,7 +554,10 @@ function details(x) {
     costRows = bd.bought.map((b) => line('in', b.item, b.qty, '−', b.qty ? b.gp / b.qty : 0, '· shop')).join('');
     const total = bd.split.reduce((a, s) => a + s.ms, 0) || 1;
     const hues = [42, 150, 205, 265, 12, 320, 95];
-    split = `<div class="fact wide"><div class="k">Where your hour goes</div>
+    const xpBy = new Map();
+    for (const sp of bd.split) { const rr = e.rate(sp.m); if (rr.xp > 0) xpBy.set(sp.m.s, (xpBy.get(sp.m.s) || 0) + rr.xp * sp.ms / HOUR); }
+    const xpLine = [...xpBy.entries()].sort((a, b) => b[1] - a[1]).map(([sk, v]) => `${img(skillIcon(sk), '', 14)}<b class="num">${fmtGp(v)}</b> ${esc(sk)}`).join('<span class="sep">·</span>');
+    split = `<div class="fact wide"><div class="k">XP per hour of play, whole chain</div><div class="v xpline">${xpLine || '<span class="muted">none</span>'}</div></div><div class="fact wide"><div class="k">Where your hour goes</div>
       <div class="split-bar">${bd.split.map((s, i) => `<i style="flex:${s.ms};--h:${hues[i % hues.length]}" title="${esc(s.m.s)}: ${esc(s.m.n)} · ${fmtMs(s.ms)}"></i>`).join('')}</div>
       <div class="split-legend">${bd.split.map((s, i) => `<span><b style="--h:${hues[i % hues.length]}"></b>${img(skillIcon(s.m.s), '', 16)}${esc(s.m.n)} <span class="muted num">${Math.round((s.ms / total) * 60)}m</span></span>`).join('')}</div></div>`;
   } else {
