@@ -243,7 +243,8 @@ def main():
             }
         wp = caps.get(NS + "Weapon")
         if wp:
-            items[it["Id"]]["wp"] = {"type": short(wp.get("Type")), "ammo": short(wp.get("RequiredAmmoType"))}
+            items[it["Id"]]["wp"] = {"type": short(wp.get("Type")), "ammo": short(wp.get("RequiredAmmoType")),
+                                     "el": [short(x) for x in wp.get("Elements") or []]}
         food = caps.get(NS + "Food")
         if food and food.get("BaseHealing"):
             items[it["Id"]]["heal"] = food["BaseHealing"]
@@ -531,9 +532,22 @@ def main():
             "pow": sum(x["Value"] for x in st.get("PowerRatings") or []),
             "prot": sum(x["Value"] for x in st.get("ProtectionRatings") or []),
             "stances": [[short(x["Stance"]), x.get("Weight", 1)] for x in en.get("Stances") or []],
-            "drops": drops_of(en.get("Drops")), "special": bool(en.get("Attacks") or en.get("Passives")),
+            "drops": drops_of(en.get("Drops")), "special": bool(en.get("Attacks") or en.get("Passives")), "el": short(en.get("Element")),
             "r": reqs_of(en.get("Requirements")),
         }
+    combat["spells"] = {}
+    for sp in O.get("MagicSpell", []):
+        st = (sp.get("Stats") or {}).get("Stats") or []
+        lv = min([q["Data"]["Level"] for q in sp.get("UnlockRequirements") or [] if short(q["Type"]) == "Level"] or [1])
+        combat["spells"][sp["Id"]] = {"n": sp["DisplayName"], "i": icon(sp.get("Icon")), "el": short(sp.get("Element")), "book": short(sp.get("Book")),
+                                      "st": {short(x["Stat"]): x["Value"] for x in st}, "runes": iq(sp.get("RuneCosts")), "lv": lv,
+                                      "r": reqs_of(sp.get("UnlockRequirements"))}
+    combat["triangle"] = {}
+    for t in O.get("CombatTriangleBonus", []):
+        combat["triangle"][short(t["PlayerStyle"]) + "|" + short(t["EnemyStyle"])] = {b["Stat"]["Name"]: b["Value"] for b in t["Bonuses"]["Component"]}
+    combat["elements"] = {}
+    for t in O.get("ElementalBonus", []):
+        combat["elements"][short(t["PlayerElement"]) + "|" + short(t["EnemyElement"])] = sum(b["Value"] for b in t["Bonuses"]["Component"] if b["Stat"]["Name"] == "PercentMaxHit")
     area_cats = {c["Id"]: c.get("DisplayName") for c in O.get("CombatAreaCategory", [])}
     for ar in O["CombatArea"]:
         combat["areas"][ar["Id"]] = {"n": ar["DisplayName"], "cat": area_cats.get(short(ar.get("Category")), short(ar.get("Category"))),
