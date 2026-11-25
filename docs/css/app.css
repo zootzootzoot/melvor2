@@ -926,3 +926,27 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 .plan-note { font-size: 12.5px; margin-top: 14px; }
 @media (max-width: 860px) { .plan-hero { grid-template-columns: auto auto auto; } .ph-chart { grid-column: 1 / -1; } }
 @media (max-width: 640px) { .ps-card { grid-template-columns: 34px minmax(0, 1fr); } .ps-side { grid-column: 2; justify-items: start; text-align: left; } .ph-k b { font-size: 26px; } }
+
+.coll-hero { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 18px; align-items: center; padding: 16px 20px; }
+.coll-hero > div:nth-child(2) { display: grid; }
+.coll-n { font-family: var(--display); font-size: 30px; }
+.coll-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px 16px; }
+.cg { display: grid; grid-template-columns: 16px 90px minmax(0, 1fr) 54px; gap: 8px; align-items: center; font-size: 12.5px; }
+.cg img { width: 16px; height: 16px; }
+.cg-bar { height: 5px; border-radius: 999px; background: rgba(255, 255, 255, .06); overflow: hidden; }
+.cg-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--gold-3), var(--gold-1)); }
+.cg .muted { text-align: right; }
+@media (max-width: 760px) { .coll-hero { grid-template-columns: auto 1fr; } .coll-groups { grid-column: 1 / -1; } }
+
+.pace { padding: 14px 18px; display: grid; gap: 8px; }
+.pace-k { display: flex; gap: 28px; }
+.pace-k span { display: grid; }
+.pace-k small { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--text-3); font-weight: 700; }
+.pace-k b { font-family: var(--display); font-size: 24px; }
+.pace-k em { font-style: normal; font-size: 12.5px; }
+.pace-legend { display: flex; gap: 16px; font-size: 12px; color: var(--text-3); }
+.pace-legend b { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.pace-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px; margin-top: 8px; }
+.pace-row { display: grid; grid-template-columns: 20px 1fr auto auto; gap: 10px; align-items: center; padding: 7px 12px; border-radius: 10px; background: rgba(22, 25, 35, .6); border: 1px solid var(--line); font-size: 13px; }
+.pace-row img { width: 20px; height: 20px; }
+.pace-row .muted { font-size: 12px; }

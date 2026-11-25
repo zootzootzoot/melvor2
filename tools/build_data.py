@@ -228,6 +228,8 @@ def main():
             "c": [short(c) for c in (it.get("Capabilities") or {})],
             "t": [short(b["BankTag"]) for b in it.get("BankTags") or [] if b.get("IsProduct")],
         }
+        if it.get("IgnoreCompletion"):
+            items[it["Id"]]["ic"] = 1
         caps = it.get("Capabilities") or {}
         eq = caps.get(NS + "Equipment")
         if eq:
@@ -480,9 +482,10 @@ def main():
     skills = {}
     for ent in EC:
         s = short(ent)
-        res = f"res://Assets/Icons/{s}.png"
-        if pk.has(res.replace("res://", "") + ".import"):
-            skills[s] = {"i": icon(res)}
+        for res in (f"res://Assets/Icons/{s}.png", f"res://Assets/Icons/{s}_64.png", f"res://Assets/{s}_64.png"):
+            if pk.has(res.replace("res://", "") + ".import"):
+                skills[s] = {"i": icon(res)}
+                break
     for extra_icon in ["GoldPieces", "SlayerCoins", "Bank", "Shop", "Combat"]:
         res = f"res://Assets/Icons/{extra_icon}.png"
         if pk.has(res.replace("res://", "") + ".import"):

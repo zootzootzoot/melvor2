@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611250003';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250003';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250003';
+import { decodeSave } from './save.js?v=202611250006';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250006';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250006';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -873,6 +873,40 @@ function rateChart(plan) {
   </svg>`;
 }
 
+/** Progress across imports: total level and wealth over time, and XP/day pace per skill. */
+function paceSection() {
+  const list = state.history?.list || [];
+  if (list.length < 2) {
+    return `<h3 class="bu-h3">Your pace</h3><div class="note">${svg.info}<span>Import your save again after you've played a while. Each import is kept on this device, and with two or more the site shows your real pace: XP per day for each skill, when you'll hit your next milestones, and how your wealth is growing.</span></div>`;
+  }
+  const first = list[0], last = list[list.length - 1];
+  const days = Math.max((last.t - first.t) / 86400000, 1 / 24);
+  const lv = (xp) => levelFromXp(xp || 0);
+  const rows = Object.keys(last.xp).filter((k) => SKILL_ORDER.includes(k) || COMBAT_SKILLS.includes(k)).map((k) => {
+    const d = (last.xp[k] || 0) - (first.xp[k] ?? last.xp[k] ?? 0);
+    const perDay = d / days;
+    const cur = lv(last.xp[k]);
+    const next = cur >= 99 ? null : Math.min(99, Math.ceil((cur + 1) / 10) * 10);
+    const eta = next && perDay > 0 ? (xpForLevel(next) - last.xp[k]) / perDay : Infinity;
+    return { k, perDay, cur, next, eta };
+  }).filter((r) => r.perDay > 0).sort((a, b) => b.perDay - a.perDay);
+  const W = 640, Hh = 110;
+  const T0 = first.t, T1 = last.t || T0 + 1;
+  const worth = list.map((x) => (x.gp || 0) + (x.bank || 0)), tls = list.map((x) => x.tl || 0);
+  const line = (vals, color) => {
+    const mx = Math.max(...vals), mn = Math.min(...vals) - (Math.max(...vals) - Math.min(...vals)) * 0.1 - 1e-9;
+    return `<path d="${list.map((x, i) => `${i ? 'L' : 'M'}${8 + ((x.t - T0) / Math.max(T1 - T0, 1)) * (W - 16)},${Hh - 10 - ((vals[i] - mn) / Math.max(mx - mn, 1)) * (Hh - 24)}`).join(' ')}" fill="none" stroke="${color}" stroke-width="2.2" vector-effect="non-scaling-stroke"/>`;
+  };
+  return `<h3 class="bu-h3">Your pace <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">· ${list.length} imports over ${fmtDuration(days * 24)}</span></h3>
+  <div class="panel pace">
+    <div class="pace-k"><span><small>Total level</small><b class="num">${fmtNum(last.tl)}</b><em class="green">+${fmtNum((last.tl || 0) - (first.tl || 0))}</em></span>
+      <span><small>Gold + bank</small><b class="num">${fmtGp(worth[worth.length - 1])}</b><em class="${worth[worth.length - 1] >= worth[0] ? 'green' : 'red'}">${fmtGp(worth[worth.length - 1] - worth[0], { sign: true })}</em></span></div>
+    <svg class="rate-chart" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none">${line(tls, '#8fb8ff')}${line(worth, '#f3c463')}</svg>
+    <div class="pace-legend"><span><b style="background:#8fb8ff"></b>Total level</span><span><b style="background:#f3c463"></b>Gold + bank value</span></div>
+  </div>
+  ${rows.length ? `<div class="pace-list">${rows.slice(0, 12).map((r) => `<div class="pace-row">${img(skillIcon(r.k), '', 20)}<b>${esc(r.k)}</b><span class="num">${fmtGp(r.perDay)} xp/day</span><span class="muted">${r.next ? `${r.next} in ${Number.isFinite(r.eta) ? fmtDuration(r.eta * 24) : '—'}` : 'maxed'}</span></div>`).join('')}</div>` : ''}`;
+}
+
 function viewPlan() {
   const e = E();
   const plan = e.speedPlan({ horizon: state.horizon, maxSteps: state.horizon > 100 ? 22 : 16 });
@@ -904,6 +938,7 @@ function viewPlan() {
     <div class="ph-chart">${plan.steps.length ? rateChart(plan) : ''}</div>
   </div>
   ${plan.steps.length ? `<ol class="psteps stagger">${plan.steps.map(step).join('')}</ol>` : `<div class="empty"><b>Nothing to plan yet.</b>No upgrade, unlock or quest pays back within this horizon.</div>`}
+  ${paceSection()}
   <p class="muted plan-note">Between steps, keep running your best money maker. Times are estimates at your current rates. Quests with parts the site can't model yet (agility, astrology, dungeons) are marked, and those parts aren't counted in their time.</p>`;
 }
 
@@ -1061,8 +1096,8 @@ function potionSection() {
 
 // ---------------------------------------------------------------- bank
 function viewBank() {
-  const sub = `<div class="seg bank-switch" role="tablist"><button data-bankview="process" aria-pressed="${state.bankView === 'process'}">Process first</button><button data-bankview="sell" aria-pressed="${state.bankView === 'sell'}">Safe to sell</button><button data-bankview="all" aria-pressed="${state.bankView === 'all'}">Everything</button></div>`;
-  return state.bankView === 'all' ? viewBankAll(sub) : state.bankView === 'sell' ? viewSafeSell(sub) : viewAlchemy(sub);
+  const sub = `<div class="seg bank-switch" role="tablist"><button data-bankview="process" aria-pressed="${state.bankView === 'process'}">Process first</button><button data-bankview="sell" aria-pressed="${state.bankView === 'sell'}">Safe to sell</button><button data-bankview="collection" aria-pressed="${state.bankView === 'collection'}">Collection</button><button data-bankview="all" aria-pressed="${state.bankView === 'all'}">Everything</button></div>`;
+  return state.bankView === 'all' ? viewBankAll(sub) : state.bankView === 'sell' ? viewSafeSell(sub) : state.bankView === 'collection' ? viewCollection(sub) : viewAlchemy(sub);
 }
 
 function viewAlchemy(sub) {
@@ -1085,6 +1120,25 @@ function viewAlchemy(sub) {
       <div class="alch-foot"><span>${fmtDuration(a.b.hours)} of ${esc(m.s.toLowerCase())} · ${fmtGp(a.b.gpPerHour)}/hr</span>${ratio > 1.05 ? `<span class="mult">${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}× the value</span>` : ''}</div>
     </article>`;
   }).join('')}</div>` : `<div class="empty"><b>No profitable processing for your current bank.</b>Your stacks are already worth the most as they are.</div>`}`;
+}
+
+function viewCollection(sub) {
+  const e = E();
+  const c = e.collection();
+  const pct = c.total ? c.have / c.total : 0;
+  const quick = c.missing.filter((x) => x.best).slice(0, 40);
+  const locked = c.missing.filter((x) => !x.best && x.lock).slice(0, 20);
+  const R = 34, C = 2 * Math.PI * R;
+  return `
+  <div class="section-head"><div><h2>Bank</h2><p>Every item you have ever found, from your save's statistics, against everything the game has. Quickest finds are the missing items you can get soonest at your current rates.</p></div>${sub}</div>
+  <div class="panel coll-hero">
+    <svg class="ring" viewBox="0 0 80 80" width="96" height="96"><circle cx="40" cy="40" r="${R}" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="8"/><circle cx="40" cy="40" r="${R}" fill="none" stroke="#f3c463" stroke-width="8" stroke-linecap="round" stroke-dasharray="${(C * pct).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 40 40)"/><text x="40" y="45" text-anchor="middle" fill="#ffe3a1" font-size="15" font-weight="700">${Math.round(pct * 100)}%</text></svg>
+    <div><b class="num coll-n">${fmtNum(c.have)} <span class="muted">/ ${fmtNum(c.total)}</span></b><span class="muted">items found</span></div>
+    <div class="coll-groups">${c.groups.map((g) => `<div class="cg">${img(skillIcon(g.skill) || G().skills._Shop?.i, '', 16)}<span>${esc(g.skill)}</span><div class="cg-bar"><i style="width:${(g.have / g.total) * 100}%"></i></div><span class="num muted">${g.have}/${g.total}</span></div>`).join('')}</div>
+  </div>
+  <h3 class="bu-h3">Quickest finds</h3>
+  <div class="sell-list">${quick.map((x) => `<button class="sell-row" data-item="${esc(x.id)}">${img(x.it.i, '', 30)}<span class="title"><b>${esc(x.it.n)}</b><span class="sub">${x.best.buy != null ? `buy for ${fmtGp(x.best.buy)}` : `${img(skillIcon(x.best.m.s), '', 13)}${esc(x.best.m.n)}`}</span></span><span class="num muted">${esc(x.src)}</span><span class="num gold">${x.best.hours < 1 / 60 ? '<1m' : fmtDuration(x.best.hours)}</span></button>`).join('') || '<div class="empty"><b>Nothing quick left.</b></div>'}</div>
+  ${locked.length ? `<h3 class="bu-h3">Locked for now</h3><div class="sell-list">${locked.map((x) => `<button class="sell-row" data-item="${esc(x.id)}">${img(x.it.i, '', 30)}<span class="title"><b>${esc(x.it.n)}</b><span class="sub">${esc(x.lock.m.n)}<span class="sep">·</span>${esc(x.lock.text)}</span></span><span class="num muted">${esc(x.src)}</span><span class="muted">${svg.lock}</span></button>`).join('')}</div>` : ''}`;
 }
 
 /** Items no skill uses (now or soon), that aren't gear, food or tools: free bank slots. */

@@ -22,6 +22,8 @@ Everything runs in the browser. Your save is decoded locally and never uploaded.
 - **Next unlocks.** The most lucrative methods you're a few levels away from, with the XP and estimated time to get there.
 - **Item lookup** (Ctrl K, or click any item icon). Where an item comes from, what it's used for, its value, how much you have, and what it does when equipped.
 - **Copy summary.** One click copies your best money maker, best idle action and next upgrade, ready to paste into Discord.
+- **Collection** (in Bank). Items you've found against all items, per source skill, with the quickest missing items to get at your rates and what's blocking the rest.
+- **Your pace** (in Plan). With two or more imports, your total level and wealth over time, XP per day per skill, and when you'll reach each next milestone.
 - **Explore at 99.** A sandbox with every skill at 99 and every upgrade, for browsing without a save. The landing page previews it.
 
 ## Layout

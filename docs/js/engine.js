@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250003';
+import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250006';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -1446,6 +1446,48 @@ export class Engine {
     out.sort((a, b) => b.dGp - a.dGp);
     this._cache.set('gear', out);
     return out;
+  }
+
+  // ---------------------------------------------------------------- collection
+  /**
+   * Item completion from the save's "found" statistic: per source skill, plus every missing item
+   * with the quickest way you can get one right now (or what's stopping you).
+   */
+  collection() {
+    if (this._cache.has('collection')) return this._cache.get('collection');
+    const found = this.p.stats?.items?.BankItemFound || {};
+    const unlocked = new Set(this.unlockedMethods().map((m) => m.id));
+    const groups = new Map();
+    const missing = [];
+    let total = 0, have = 0;
+    for (const [id, it] of Object.entries(this.items)) {
+      if (it.ic || !it.n) continue;
+      const prods = this.producers.get(id) || [];
+      const src = prods.find((m) => !m.quest)?.s || (prods[0]?.quest ? 'Quests' : this.g.buy[id] ? 'Shop' : 'Other');
+      total++;
+      const g = groups.get(src) || { skill: src, total: 0, have: 0 };
+      g.total++;
+      const isFound = (found[id] || 0) > 0 || (this.bank[id] || 0) > 0;
+      if (isFound) { have++; g.have++; groups.set(src, g); continue; }
+      groups.set(src, g);
+      let best = null;
+      for (const m of prods) {
+        if (!unlocked.has(m.id)) continue;
+        const per = this.rate(m).outs.find(([x]) => x === id)?.[1] || 0;
+        if (per > 0 && (!best || 1 / per < best.hours)) best = { hours: 1 / per, m };
+      }
+      if (Number.isFinite(this.buyPrice(id)) && (!best || best.hours > 0.01)) best = { hours: 0, buy: this.buyPrice(id) };
+      let lock = null;
+      if (!best && prods.length) {
+        const st = prods.map((m) => ({ m, st: this.status(m) })).sort((a, b) => a.st.levelGap - b.st.levelGap)[0];
+        lock = { m: st.m, text: st.st.missing.map((x) => x.text).join(', ') || (this.rate(st.m).blocked || 'not safe to farm yet') };
+      }
+      missing.push({ id, it, src, best, lock });
+    }
+    missing.sort((a, b) => (a.best ? a.best.hours : Infinity) - (b.best ? b.best.hours : Infinity));
+    const res = { total, have, groups: [...groups.values()].sort((a, b) => b.total - a.total), missing };
+    this._cache.set('collection', res);
+    return res;
   }
 
   // ---------------------------------------------------------------- speedrun planner
