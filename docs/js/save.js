@@ -2,7 +2,7 @@
 // Save string = Base64( Brotli( SaveWriter stream ) ). The game flushes the Brotli
 // stream without closing it, so the stream is "truncated" by design: we decode
 // with a streaming decoder and accept NeedsMoreInput at the end.
-import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611242347';
+import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611250002';
 
 let brotliReady = null;
 /** For Node tests: initialise the decoder from wasm bytes instead of fetching it. */
@@ -295,6 +295,28 @@ export async function decodeSave(input) {
       }
     } catch { /* tolerate */ }
   }
+  // Quests/Quests: per quest {int state, steps{ tasks{ goals{double progress, bool complete, bool active}, bool visible, bool costsMet, bool conditions, int state }, bool visible, int state }}
+  const quests = {};
+  const qc = ents.Quests?.Quests;
+  if (qc) {
+    try {
+      const r = new Reader(raw, qc.pos);
+      const regions = (fn) => { const n = r.i32(); const out = {}; for (let i = 0; i < n; i++) { const id = short(r.str()); const len = r.i32(); const e = r.p + len; try { out[id] = fn(); } catch { /* skip */ } r.p = e; } return out; };
+      Object.assign(quests, regions(() => {
+        const state = r.i32();
+        const steps = regions(() => {
+          const tasks = regions(() => {
+            const goals = regions(() => { const progress = r.f64(); const complete = r.bool(); return { progress, complete }; });
+            r.bool(); const costsMet = r.bool(); r.bool(); const st = r.i32();
+            return { goals, costsMet, state: st };
+          });
+          r.bool(); const st = r.i32();
+          return { tasks, state: st };
+        });
+        return { state, steps };
+      }));
+    } catch { /* tolerate */ }
+  }
   const components = Object.fromEntries(Object.entries(ents).map(([k, v]) => [k, Object.keys(v)]));
-  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, entities: Object.keys(ents), components };
+  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, quests, entities: Object.keys(ents), components };
 }

@@ -3,6 +3,8 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Plan tab: speedrun-style route that picks the fastest-paying next step and resolves its training, gold and quest prerequisites; income chart over play time
+- Quests: parsed from the save (goal progress), quest requirements resolved, quest-only actions and bosses estimated, hand-in items costed, unlocks valued
 - Money makers: best overall / from scratch / from your bank / leave it running / value added
 - Rates with shop upgrades, equipped tools and mastery guild rank rewards
 - Mastery guild ranks read from the save

@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611242347';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611242347';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611242347';
+import { decodeSave } from './save.js?v=202611250002';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250002';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250002';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -18,7 +18,7 @@ const MODES = {
   sell: { label: 'Value added', desc: 'The best crafts, with inputs priced at what they would sell for' },
 };
 const TABS = {
-  money: 'Money makers', train: 'Training', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks',
+  plan: 'Plan', money: 'Money makers', train: 'Training', quests: 'Quests', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks',
 };
 
 const state = {
@@ -26,9 +26,9 @@ const state = {
   tab: 'money', mode: 'best', skill: '', q: '', passive: false, limit: 30, open: new Set(),
   bankView: 'process', bankSort: 'value', bankQ: '', bankSortTotal: true,
   mods: true, trainSkill: '', trainTarget: null, trainPrefer: 'xp', trainLevel: null,
-  upSort: 'payback', upFilter: 'all', history: null, window: 8,
+  upSort: 'payback', upFilter: 'all', history: null, window: 8, horizon: 96,
 };
-const PREF_FIELDS = ['window', 'mode', 'passive', 'bankSort', 'tab', 'mods', 'trainSkill', 'trainPrefer', 'upSort', 'bankView', 'bankSortTotal'];
+const PREF_FIELDS = ['horizon', 'window', 'mode', 'passive', 'bankSort', 'tab', 'mods', 'trainSkill', 'trainPrefer', 'upSort', 'bankView', 'bankSortTotal'];
 Object.assign(state, (() => {
   try {
     const p = JSON.parse(localStorage.getItem(PREF_KEY)) || {};
@@ -241,7 +241,7 @@ function renderTeaser() {
 
 // ---------------------------------------------------------------- dashboard
 function tabList() {
-  return state.explorer ? ['money', 'train'] : ['money', 'train', 'upgrades', 'bank', 'unlocks'];
+  return state.explorer ? ['money', 'train'] : ['plan', 'money', 'train', 'quests', 'upgrades', 'bank', 'unlocks'];
 }
 
 function renderDashboard() {
@@ -354,7 +354,7 @@ function renderView() {
   const v = $('#view');
   if (!v) return;
   setHash();
-  const views = { money: viewMoney, train: viewTrain, upgrades: viewUpgrades, bank: viewBank, unlocks: viewUnlocks };
+  const views = { plan: viewPlan, money: viewMoney, train: viewTrain, quests: viewQuests, upgrades: viewUpgrades, bank: viewBank, unlocks: viewUnlocks };
   v.innerHTML = `<div class="view fade-in">${(views[state.tab] || viewMoney)()}</div>`;
   bindView(v);
 }
@@ -851,6 +851,127 @@ function guildBadge(sk) {
   </div>`;
 }
 
+// ---------------------------------------------------------------- plan
+const KIND = {
+  unlock: { label: 'Unlock', cls: 'k-unlock' }, shop: { label: 'Upgrade', cls: 'k-shop' },
+  gear: { label: 'Gear', cls: 'k-gear' }, quest: { label: 'Quest', cls: 'k-quest' },
+};
+
+function rateChart(plan) {
+  const pts = [[0, plan.startRate]];
+  for (const st of plan.steps) { pts.push([st.time - st.hours, st.rateBefore]); pts.push([st.time, st.rateAfter]); }
+  const T = Math.max(plan.time, 0.01), R = Math.max(...pts.map((p) => p[1]), 1);
+  const W = 640, Hh = 120, X = (t) => 8 + (t / T) * (W - 16), Y = (r) => Hh - 8 - (r / R) * (Hh - 24);
+  let d = `M${X(0)},${Y(plan.startRate)}`;
+  let cur = plan.startRate;
+  for (const st of plan.steps) { d += ` L${X(st.time)},${Y(cur)}`; if (st.rateAfter !== cur) { d += ` L${X(st.time)},${Y(st.rateAfter)}`; cur = st.rateAfter; } }
+  const area = d + ` L${X(T)},${Y(0) + 8} L${X(0)},${Y(0) + 8} Z`;
+  return `<svg class="rate-chart" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" role="img" aria-label="Gold per hour over play time">
+    <defs><linearGradient id="rg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="rgba(243,196,99,.35)"/><stop offset="1" stop-color="rgba(243,196,99,0)"/></linearGradient></defs>
+    <path d="${area}" fill="url(#rg)"/><path d="${d}" fill="none" stroke="#f3c463" stroke-width="2.2" vector-effect="non-scaling-stroke"/>
+    ${plan.steps.filter((st) => st.rateAfter > st.rateBefore).map((st) => `<circle cx="${X(st.time)}" cy="${Y(st.rateAfter)}" r="3.2" fill="#ffe3a1"/>`).join('')}
+  </svg>`;
+}
+
+function viewPlan() {
+  const e = E();
+  const plan = e.speedPlan({ horizon: state.horizon, maxSteps: state.horizon > 100 ? 22 : 16 });
+  const step = (st, i) => {
+    const k = KIND[st.kind] || KIND.unlock;
+    const pre = [];
+    for (const t of st.trainSteps || []) pre.push(`<button class="pre linkish-plain" data-tskill-go="${esc(t.skill)}" data-target-go="${t.level}">${img(skillIcon(t.skill), '', 14)}Train ${esc(t.skill)} to ${t.level}<span class="muted"> · ${fmtDuration(t.hours)}</span></button>`);
+    if (st.earn > 0.005) pre.push(`<span class="pre">${img(G().currencies.GoldPieces, '', 14)}Save up ${fmtGp(st.gp)} gold<span class="muted"> · ${fmtDuration(st.earn)} of ${esc(plan.steps[i - 1]?.bestName || plan.startName)}</span></span>`);
+    if (st.items?.length) pre.push(...st.items.filter(([it, q]) => (e.bank[it] || 0) < q).map(([it, q]) => `<span class="pre" data-item="${esc(it)}">${img(itemIcon(it), '', 14)}Get ${fmtNum(q - (e.bank[it] || 0))} ${esc(e.name(it))}</span>`));
+    const icon = st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'quest' ? G().skills.Quests?.i || G().skills.CompletionLog?.i : st.kind === 'gear' ? itemIcon(st.id.slice(2)) : G().shop[st.id.slice(2)]?.i;
+    const target = st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'unlock' ? `data-tskill-go="${esc(st.needs[0]?.skill || st.m.s)}" data-target-go="${st.needs[0]?.level || st.m.lv}"` : st.kind === 'gear' ? `data-item="${esc(st.id.slice(2))}"` : 'data-gotab="upgrades"';
+    return `<li class="ps ${k.cls}">
+      <span class="ps-n num">${i + 1}</span>
+      <div class="ps-card panel" role="button" tabindex="0" ${target}>
+        <span class="ps-ico">${img(icon, '', 30)}</span>
+        <span class="ps-main"><span class="ps-kind">${k.label}</span><b>${esc(st.title)}</b><span class="ps-why">${esc(st.why)}${st.unknown ? ' · some parts not modelled' : ''}</span>${pre.length ? `<span class="ps-pre">${pre.join('')}</span>` : ''}</span>
+        <span class="ps-side"><b class="num">${fmtDuration(st.hours)}</b><small class="num">at ${fmtDuration(st.time)}</small>${st.rateAfter > st.rateBefore + 1 ? `<span class="ps-rate num">${fmtGp(st.rateBefore)} → <b>${fmtGp(st.rateAfter)}</b>/hr</span>` : ''}</span>
+      </div>
+    </li>`;
+  };
+  return `
+  <div class="section-head"><div><h2>Your route</h2><p>A step-by-step plan from where your save is now. Each step is picked by how quickly it pays back the time it costs. The training, gold and earlier quests it depends on are worked out for you, and training done for one step counts toward the next. Rates are from scratch, so they're sustainable.</p></div>
+    <div class="seg" role="group" aria-label="Horizon">${[[24, '1 day'], [96, '4 days'], [336, '2 weeks']].map(([h, l]) => `<button data-horizon="${h}" aria-pressed="${state.horizon === h}">${l}</button>`).join('')}</div></div>
+  <div class="panel plan-hero">
+    <div class="ph-k"><small>Now</small><b class="num">${fmtGp(plan.startRate)}</b><span class="muted">gp/hr · ${esc(plan.startName)}</span></div>
+    <div class="ph-arrow">${svg.arrow}</div>
+    <div class="ph-k"><small>After ${fmtDuration(plan.time)} of play</small><b class="num gold">${fmtGp(plan.endRate)}</b><span class="muted">gp/hr${plan.startRate > 0 ? ` · ${(plan.endRate / plan.startRate).toFixed(1)}×` : ''}</span></div>
+    <div class="ph-chart">${plan.steps.length ? rateChart(plan) : ''}</div>
+  </div>
+  ${plan.steps.length ? `<ol class="psteps stagger">${plan.steps.map(step).join('')}</ol>` : `<div class="empty"><b>Nothing to plan yet.</b>No upgrade, unlock or quest pays back within this horizon.</div>`}
+  <p class="muted plan-note">Between steps, keep running your best money maker. Times are estimates at your current rates. Quests with parts the site can't model yet (agility, astrology, dungeons) are marked, and those parts aren't counted in their time.</p>`;
+}
+
+// ---------------------------------------------------------------- quests
+function unlockChip(u) {
+  const g = G();
+  const [kind, id, name] = u;
+  if (kind === 'shop') {
+    const sp = g.shop[id];
+    const fx = (sp?.b || []).map((b) => bonusText(b, lookup)).map((t) => `${t.val} ${t.label}`).join(', ');
+    return `<span class="qchip" title="${esc(fx)}">${img(sp?.i, '', 16)}Shop: ${esc(name)}</span>`;
+  }
+  if (kind === 'area') return `<span class="qchip">${img(g.skills.Combat?.i, '', 16)}Area: ${esc(name)}</span>`;
+  if (kind === 'enemy') return '';
+  return `<span class="qchip">${svg.arrow}Next: ${esc(name)}</span>`;
+}
+
+function questDetail(q) {
+  const e = E();
+  const goalRow = (gl) => {
+    const pct = gl.q.n > 0 ? Math.min(100, (gl.prog / gl.q.n) * 100) : 0;
+    const est = gl.complete ? `<span class="pill green">${svg.check}done</span>`
+      : gl.est ? `<span class="num">${fmtDuration(gl.est.hours)}</span><small>${esc(gl.est.m?.n || '')}${gl.est.train?.length ? ` · after ${gl.est.train.map((t) => `${esc(t.skill)} ${t.level}`).join(', ')}` : ''}</small>`
+      : `<small class="muted">${esc(gl.why || 'not modelled yet')}</small>`;
+    return `<div class="gt ${gl.complete ? 'is-done' : ''}"><span class="gpts">${svg.target}</span><div class="gt-main"><b>${esc(gl.text)}</b>${gl.q.n > 1 && !gl.complete ? `<div class="gt-bar"><i style="width:${pct}%"></i></div><small class="num">${fmtNum(gl.prog)} / ${fmtNum(gl.q.n)}</small>` : ''}</div><div class="gt-est">${est}</div></div>`;
+  };
+  const costRow = (c) => `<div class="gt ${c.have ? 'is-done' : ''}" data-item="${esc(c.item)}"><span class="gpts">${img(itemIcon(c.item), '', 18)}</span><div class="gt-main"><b>Hand in ${fmtNum(c.qty)} ${esc(e.name(c.item))}</b><small>you have ${fmtNum(e.bank[c.item] || 0)}</small></div><div class="gt-est">${c.have ? `<span class="pill green">${svg.check}ready</span>` : Number.isFinite(c.hours) ? `<span class="num">${fmtDuration(c.hours)}</span><small>${c.via?.kind === 'make' ? 'make: ' + esc(c.via.m.n) : 'buy'}</small>` : '<small class="muted">no known source yet</small>'}</div></div>`;
+  return `<div class="q-detail">
+    ${q.Q.desc ? `<p class="q-desc">${esc(q.Q.desc)}</p>` : ''}
+    ${q.training?.length ? `<div class="q-train">${svg.bolt}<span>Training first: ${q.training.map((t) => `<button class="linkish" data-tskill-go="${esc(t.skill)}" data-target-go="${t.level}">${esc(t.skill)} ${t.level}</button> <span class="muted">(~${fmtDuration(t.hours)})</span>`).join(', ')}</span></div>` : ''}
+    ${q.steps.map((st, i) => `<div class="q-step ${st.done ? 'done' : st.id === q.current ? 'current' : ''}">
+      <div class="q-step-h"><span class="q-n">${st.done ? svg.check : i + 1}</span><span>${esc(st.desc || `Step ${i + 1}`)}</span></div>
+      ${st.done ? '' : `<div class="gt-list">${st.tasks.map((t) => t.goals.map(goalRow).join('') + t.cost.map(costRow).join('') + (t.cond || []).map((c) => `<div class="gt"><span class="gpts">${svg.q}</span><div class="gt-main"><b>${esc(c)}</b></div><div class="gt-est"><small class="muted">not modelled yet</small></div></div>`).join('')).join('')}</div>`}
+    </div>`).join('')}
+    <div class="q-rewards"><span class="muted">Rewards</span>${q.Q.rw.gp ? `<span class="qchip">${img(G().currencies.GoldPieces, '', 16)}${fmtNum(q.Q.rw.gp)}</span>` : ''}${q.Q.rw.items.map(([it, n]) => `<span class="qchip" data-item="${esc(it)}">${img(itemIcon(it), '', 16)}${fmtNum(n)} ${esc(e.name(it))}</span>`).join('')}${q.Q.rw.text ? `<span class="qchip">${esc(q.Q.rw.text)}</span>` : ''}${q.unlocks.map(unlockChip).join('')}</div>
+  </div>`;
+}
+
+function viewQuests() {
+  const e = E();
+  const list = e.questList();
+  const doneN = list.filter((q) => q.done).length;
+  const next = list.find((q) => !q.done && q.available) || null;
+  let cum = 0, unknownAhead = false;
+  const rows = list.map((q) => {
+    if (!q.done) { cum += q.hours; unknownAhead ||= q.unknown; }
+    return { q, cum, unknownAhead };
+  });
+  const open = state.openQuest || next?.id;
+  return `
+  <div class="section-head"><div><h2>Quests</h2><p>The quest line from your save, with every remaining task: its progress, the fastest way to do it at your rates, the training it needs first, and the items to hand in. ${doneN} of ${list.length} done.</p></div></div>
+  ${next ? `<div class="panel q-next">
+    <div class="q-next-h"><div><span class="kicker">${next.started ? 'In progress' : 'Up next'}</span><h3>${esc(next.Q.n)}</h3><span class="muted">${esc(next.Q.cat)}</span></div>
+      <div class="gp-sum"><span class="num">${fmtDuration(next.hours)}${next.unknown ? '+' : ''}</span><small>${next.unknown ? 'plus parts not modelled' : 'estimated play time'}</small></div></div>
+    ${questDetail(next)}
+  </div>` : `<div class="note">${svg.info}<span>No quest is available right now.</span></div>`}
+  <h3 class="bu-h3">The whole quest line</h3>
+  <div class="q-list">${rows.map(({ q, cum, unknownAhead }) => `
+    <div class="q-row ${q.done ? 'done' : q.available ? 'ready' : 'locked'} ${open === q.id && q !== next ? 'open' : ''}">
+      <button class="q-main" data-quest="${esc(q.id)}">
+        <span class="q-dot">${q.done ? svg.check : q.available ? svg.spark : svg.lock}</span>
+        <span class="title"><b>${esc(q.Q.n)}</b><span class="sub">${esc(q.Q.cat)}${q.unlocks.filter((u) => u[0] !== 'enemy' && u[0] !== 'quest').length ? `<span class="sep">·</span>unlocks ${q.unlocks.filter((u) => u[0] === 'shop' || u[0] === 'area').map((u) => esc(u[2])).join(', ')}` : ''}</span></span>
+        <span class="q-t num">${q.done ? '<span class="muted">done</span>' : `${fmtDuration(q.hours)}${q.unknown ? '+' : ''}`}</span>
+        <span class="q-c num muted">${q.done ? '' : `~${fmtDuration(cum)}${unknownAhead ? '+' : ''} total`}</span>
+      </button>
+      ${open === q.id && q !== next && !q.done ? `<div class="q-body">${questDetail(q)}</div>` : ''}
+    </div>`).join('')}</div>`;
+}
+
 // ---------------------------------------------------------------- upgrades
 function viewUpgrades() {
   const e = E(), g = G();
@@ -1206,7 +1327,7 @@ function openPalette() {
 function bindView(v) {
   v.onclick = (ev) => {
     const itemEl = ev.target.closest('[data-item]');
-    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go]');
+    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go]');
     // Item icons open the item drawer, even inside a clickable row.
     if (itemEl?.dataset.item && (!t || (t !== itemEl && t.contains(itemEl)))) { ev.stopPropagation(); openItem(itemEl.dataset.item); return; }
     if (!t) return;
@@ -1230,6 +1351,9 @@ function bindView(v) {
     }
     if (t.dataset.mode) { state.mode = t.dataset.mode; state.limit = 30; state.open.clear(); savePrefs(); return rerender(); }
     if (t.dataset.skill !== undefined) { state.skill = t.dataset.skill; state.limit = 30; return rerender(); }
+    if (t.dataset.horizon) { state.horizon = Number(t.dataset.horizon); savePrefs(); return rerender(); }
+    if (t.dataset.questGo) { state.openQuest = t.dataset.questGo; return go('quests'); }
+    if (t.dataset.quest) { state.openQuest = state.openQuest === t.dataset.quest ? null : t.dataset.quest; return rerender(); }
     if (t.dataset.window) { state.window = Number(t.dataset.window); savePrefs(); return rerender(); }
     if (t.dataset.banksort !== undefined) { state.bankSortTotal = t.dataset.banksort === '1'; savePrefs(); return rerender(); }
     if (t.dataset.bsort) { state.bankSort = t.dataset.bsort; savePrefs(); return rerender(); }

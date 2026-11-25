@@ -8,6 +8,8 @@ Everything runs in the browser. Your save is decoded locally and never uploaded.
 
 ## Features
 
+- **Plan (your route).** A speedrun-style, step-by-step plan from your save. Each step (quest, upgrade, gear, or a method to unlock) is chosen by how quickly it pays back the time it costs. What it depends on is resolved one layer down: training to the levels it needs, saving up the gold, the earlier quests in a chain, and recipes behind guild ranks. Training for one step counts toward the next, and a chart shows your gold per hour over play time.
+- **Quests.** The quest line from your save with every remaining task: progress per goal, the fastest way to do it at your rates, the training it needs first, items to hand in (what you have, how to make the rest), rewards, and the shop upgrades and combat areas each quest unlocks. Quest requirements are read from the save.
 - **Money makers.** Every method ranked by gold per hour. Open any row for the full per-hour ledger, the production chain and which of your upgrades affect it. There are five views:
   - **Best overall** (default). For each method, whichever pays more: from scratch, or from what's already in your bank.
   - **From scratch.** Full production chains. Each input is gathered by you (its time counts) or bought from the shop, whichever is cheaper. Shows where each minute of the hour goes.

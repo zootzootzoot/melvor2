@@ -299,8 +299,7 @@ def main():
 
     def push(skill, r, kind, ms, xp, ins, outs, gp=0.0, reqs=None, extra=None, icon_res=None, name=None):
         cat = short(r.get("Category"))
-        if cat in quest_cats:
-            return
+        is_quest = cat in quest_cats  # quest-only actions: kept for quest estimates, hidden from rankings
         rq = reqs if reqs is not None else reqs_of(r.get("Requirements"), cat_reqs.get(cat))
         m = {
             "id": f"{skill}:{r['Id']}", "s": skill, "n": name or (r["DisplayName"] if isinstance(r["DisplayName"], str) else r["DisplayName"]["Singular"]),
@@ -312,6 +311,8 @@ def main():
             m["sub"] = short(r["Subcategory"])
         if extra:
             m.update(extra)
+        if is_quest:
+            m["quest"] = True
         methods.append(m)
 
     # Woodcutting: one log per tree "cut" = MaxHealth hits; per-hit drops roll every hit.
@@ -595,12 +596,14 @@ def main():
         n = dd.get("MaxProgress", 1)
         q = {"t": ty, "n": n}
         for k, key in (("Recipe", "r"), ("Category", "cat"), ("Subcategory", "sub"), ("Item", "it"), ("Location", "loc"),
-                       ("TargetType", "tt"), ("GoalCategory", "gc"), ("Animal", "r")):
+                       ("TargetType", "tt"), ("GoalCategory", "gc"), ("Animal", "r"), ("Enemy", "en"), ("Area", "area")):
             if dd.get(k):
                 q[key] = short(dd[k])
         ent = short((dd.get("Component") or {}).get("Entity")) or sk
+        q["e"] = ent
         parts = [cat_names.get(q["cat"]) if q.get("cat") else None, sub_names.get(q["sub"]) if q.get("sub") else None]
         what = (rec_name.get((ent, q.get("r"))) if q.get("r") else None) or ": ".join(x for x in parts if x)             or (goal_cat_names.get(q.get("gc")) if q.get("gc") else None)
+        what = what or (human(q.get("r")) if q.get("r") else None)
         item = items.get(q.get("it"), {}).get("n") if q.get("it") else None
         num = f"{n:,}"
         text = {
@@ -626,6 +629,10 @@ def main():
             "WoodcuttingInstantCut": f"Instantly fell {num} trees",
             "MiningEarlyBreak": f"Break {num} rocks early",
             "HuntingTrapAnimal": f"Trap {num} {what or 'animals'}",
+            "CombatKillEnemy": f"Kill {num} {combat['enemies'].get(q.get('en'), {}).get('n') or 'enemies'}",
+            "CompleteDungeon": f"Complete a dungeon x{num}",
+            "ThievingPickpocketTarget": f"Pickpocket {num} {rec_name.get(('Thieving', q.get('r'))) or 'targets'}",
+            "FarmingPlantRecipe": f"Plant {num} {what or 'crops'}",
             "HuntingTrapAnimalLocation": f"Trap {num} animals in {human(q.get('loc'))}",
         }.get(ty) or f"{human(ty)} x{num}"
         return q, text
@@ -687,11 +694,55 @@ def main():
         guild[sk] = {"ranks": ranks, "tasks": tasks, "bonuses": bonuses,
                      "rankNames": {short(r["Id"]): next((x["DisplayName"] for x in O["MasteryGuildRank"] if x["Id"] == short(r["Id"])), r["Id"]) for r in cfg.get("MasteryGuildRanks") or []}}
 
+    # ---- quests: steps -> tasks -> goals / hand-ins, rewards, and what each quest unlocks
+    quest_cat_names = {c["Id"]: c["DisplayName"] for c in O.get("QuestCategory", [])}
+    quests = {}
+    registered = {short(x["Id"]) for x in EC.get(NS + "Quests", {}).get("Quests") or []}
+    for qd in O["Quest"]:
+        if registered and qd["Id"] not in registered:
+            continue  # defined in the data but not offered by the game (placeholders)
+        steps = []
+        for st in qd.get("Steps") or []:
+            tasks = []
+            for tk in st.get("TasksInOrder") or []:
+                goals = []
+                for gl in tk.get("Goals") or []:
+                    q, text = task_goal({"Goal": gl}, None)
+                    goals.append({"id": str((gl.get("Data") or {}).get("Id", len(goals))), "text": text, "q": q})
+                conds = [human_cond(c) for c in tk.get("ConditionGoals") or []]
+                tasks.append({"id": str(tk["Id"]), "goals": goals, "cost": iq((tk.get("Costs") or {}).get("Items")),
+                              "gp": sum(c["Quantity"] for c in (tk.get("Costs") or {}).get("Currencies") or [] if short(c["Currency"]) == "GoldPieces"),
+                              "cond": conds})
+            steps.append({"id": str(st["Id"]), "desc": st.get("Description") or "", "tasks": tasks})
+        rw = qd.get("Rewards") or {}
+        quests[qd["Id"]] = {
+            "n": qd["DisplayName"], "cat": quest_cat_names.get(short(qd.get("Category")), short(qd.get("Category"))),
+            "desc": (qd.get("Description") or "").split(" - ", 1)[-1][:400], "r": reqs_of(qd.get("Requirements")),
+            "steps": steps,
+            "rw": {"items": iq(rw.get("Items")),
+                   "gp": sum(c["Quantity"] for c in rw.get("Currencies") or [] if short(c["Currency"]) == "GoldPieces"),
+                   "cur": [[short(c["Currency"]), c["Quantity"]] for c in rw.get("Currencies") or [] if short(c["Currency"]) != "GoldPieces"],
+                   "text": rw.get("CustomRewards") if isinstance(rw.get("CustomRewards"), str) else None},
+            "unlocks": [], "order": len(quests),
+        }
+    def note_unlock(reqs, kind, oid, name):
+        for r in reqs or []:
+            if r.get("t") == "quest" and r["id"] in quests:
+                quests[r["id"]]["unlocks"].append([kind, oid, name])
+    for sid, sp in shop.items():
+        note_unlock(sp["r"], "shop", sid, sp["n"])
+    for aid, ar in combat["areas"].items():
+        note_unlock(ar["r"], "area", aid, ar["n"])
+    for eid, en in combat["enemies"].items():
+        note_unlock(en["r"], "enemy", eid, en["n"])
+    for qid, qd in quests.items():
+        note_unlock(qd["r"], "quest", qid, qd["n"])
+
     game = {
         "v": 1,
         "gameVersion": "Alpha 0.11.5.5 (save v31)",
         "items": items, "buy": buy, "shop": shop, "methods": methods, "skills": skills, "currencies": cur_icons,
-        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat,
+        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat, "quests": quests,
     }
     with open(os.path.join(OUT, "data", "game.json"), "w", encoding="utf-8") as f:
         json.dump(game, f, separators=(",", ":"), ensure_ascii=False)

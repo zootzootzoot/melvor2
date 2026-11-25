@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611242347';
+import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250002';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -119,7 +119,7 @@ export class Engine {
     const out = [];
     const seen = new Set();
     for (const [aid, a] of Object.entries(C.areas)) {
-      if (a.cat === 'Quests') continue;
+      const questArea = a.cat === 'Quests';
       for (const eid of a.enemies) {
         const e = C.enemies[eid];
         if (!e || seen.has(eid)) continue;
@@ -129,7 +129,7 @@ export class Engine {
         out.push({
           id: 'Combat:' + eid, s: 'Combat', n: e.n, i: e.i, k: 'active', ms: 10000, xp: 0, in: [], out: d.items, gp: d.gp,
           lv: Math.max(1, ...r.filter((q) => q.t === 'lvl').map((q) => q.l)), r, cat: aid, rid: eid, loc: a.n, locId: aid,
-          note: a.cat, x: { t: 'fight', e: eid, dark: a.dark || 0 },
+          note: a.cat, x: { t: 'fight', e: eid, dark: a.dark || 0 }, quest: questArea || undefined,
         });
       }
     }
@@ -140,7 +140,7 @@ export class Engine {
   name(item) { return this.items[item]?.n ?? item; }
 
   // ---------------------------------------------------------------- player
-  setPlayer(p, { extraShop = [], extraTools = [], extraGear = [], useMods = this.useMods } = {}) {
+  setPlayer(p, { extraShop = [], extraTools = [], extraGear = [], useMods = this.useMods, keepCombat = false } = {}) {
     this.p = p;
     this.useMods = useMods;
     this.levels = {};
@@ -152,6 +152,8 @@ export class Engine {
     for (const id of extraTools) this.tools[id] = 1;
     this._cache = new Map();
     this._rateCache = new Map();
+    // combat loadouts don't depend on skilling upgrades/tools, so hypothetical clones can share them
+    this._combatCache = keepCombat && this._combatCache ? this._combatCache : new Map();
     this.computeGuilds(p);
     this.fighter = this.g.combat ? playerFighter(this.g, p) : null;
     this.extraGear = extraGear;
@@ -222,28 +224,32 @@ export class Engine {
     }
   }
 
-  /** Units per hour of the fastest unlocked way to progress a guild goal, or null if we can't tell. */
+  /** Units of goal q that method m makes per hour (0 if it doesn't count toward q). */
+  goalPerHour(m, r, q) {
+    const match = (!q.r || m.rid === q.r) && (!q.sub || m.sub === q.sub) && (!q.cat || m.cat === q.cat);
+    switch (q.t) {
+      case 'WoodcuttingCutTree': case 'MiningMineRock': case 'FishingFishRecipe': case 'FiremakingBurnRecipe':
+      case 'ArtisanCreateRecipe': case 'HuntingTrapAnimal':
+        return match ? r.aph : 0;
+      case 'CookRecipe': return match ? r.aph * r.succ : 0;
+      case 'ArtisanCompleteStep': return match ? r.aph * (r.extra?.steps || 1) : 0;
+      case 'ThievingPickpocketTargetType': return (!q.tt || m.rt === q.tt) && (!q.loc || m.cat === q.loc) ? r.aph * r.succ : 0;
+      case 'ThievingPickpocketTarget': return !q.r || m.rid === q.r ? r.aph * r.succ : 0;
+      case 'ActionGainItem': return r.outs.find(([it]) => it === q.it)?.[1] || 0;
+      case 'ActionGainItemValue': return r.outValue - r.gp;
+      case 'CombatKillEnemy': return !q.en || m.rid === q.en ? r.aph : 0;
+      case 'HuntingTrapAnimalLocation': return !q.loc || m.locId === q.loc ? r.aph : 0;
+      default: return 0;
+    }
+  }
+
+  /** Units per hour of the fastest unlocked way to progress a goal (per hour of play), or null. */
   taskRate(sk, q, left = 0) {
     const ms = this.unlockedMethods().filter((m) => m.s === sk && m.k === 'active');
-    const match = (m) => (!q.r || m.rid === q.r) && (!q.sub || m.sub === q.sub) && (!q.cat || m.cat === q.cat);
     let best = null;
-    const consider = (m, perHour) => { if (perHour > 0 && (!best || perHour > best.perHour)) best = { m, perHour }; };
     for (const m of ms) {
-      const r = this.rate(m);
-      switch (q.t) {
-        case 'WoodcuttingCutTree': case 'MiningMineRock': case 'FishingFishRecipe': case 'FiremakingBurnRecipe':
-        case 'ArtisanCreateRecipe':
-          if (match(m)) consider(m, r.aph); break;
-        case 'CookRecipe': if (match(m)) consider(m, r.aph * r.succ); break;
-        case 'ArtisanCompleteStep': if (match(m)) consider(m, r.aph * (r.extra?.steps || 1)); break;
-        case 'ThievingPickpocketTargetType':
-          if ((!q.tt || m.rt === q.tt) && (!q.loc || m.cat === q.loc)) consider(m, r.aph * r.succ); break;
-        case 'ActionGainItem': { const o = r.outs.find(([it]) => it === q.it); if (o) consider(m, o[1]); break; }
-        case 'ActionGainItemValue': consider(m, r.outValue - r.gp); break;
-        case 'HuntingTrapAnimal': if (match(m)) consider(m, r.aph); break;
-        case 'HuntingTrapAnimalLocation': if (!q.loc || m.locId === q.loc) consider(m, r.aph); break;
-        default: break;
-      }
+      const per = this.goalPerHour(m, this.rate(m), q);
+      if (per > 0 && (!best || per > best.perHour)) best = { m, perHour: per };
     }
     // Per hour of play: inputs come from the bank while it lasts, then have to be made (chain time).
     if (best && best.m.in.length && left > 0) {
@@ -257,6 +263,105 @@ export class Engine {
       }
     }
     return best;
+  }
+
+  /**
+   * Hours to finish `left` units of a goal, one layer deeper than taskRate: if the action is
+   * locked behind levels, add the training to get there. Returns { hours, m, train: [{skill, level, hours}], why }.
+   */
+  goalPlan(sk, q, left) {
+    const b = this.taskRate(sk, q, left);
+    if (b) return { hours: left / b.perHour, m: b.m, train: [] };
+    let best = null, why = null;
+    for (const m of this.methods) {
+      if (m.s !== sk || m.k !== 'active') continue;
+      if (!(this.goalPerHour(m, this.rate(m, { ...this.levels, [sk]: 99 }), q) > 0)) continue;
+      const st = this.status(m);
+      if (st.unlocked) { why ||= this.rate(m).blocked || 'Not safe to farm yet'; continue; }
+      if (!st.onlyLevelLocked) { why ||= 'Needs ' + st.missing.map((x) => x.text).join(', '); continue; }
+      const need = new Map();
+      for (const x of st.missing) if (x.kind === 'lvl') need.set(x.skill, Math.max(need.get(x.skill) || 0, x.need));
+      const lv = { ...this.levels, ...Object.fromEntries(need) };
+      const per = this.goalPerHour(m, this.rate(m, lv), q);
+      if (!(per > 0)) continue;
+      const train = [...need.entries()].map(([skill, level]) => ({ skill, level, hours: NOT_TRAINABLE.has(skill) ? Infinity : this.planLevel(skill, level).hours }));
+      const hours = train.reduce((a, t) => a + t.hours, 0) + left / per;
+      if (Number.isFinite(hours) && (!best || hours < best.hours)) best = { hours, m, train };
+    }
+    return best || { hours: Infinity, why: why || 'Not modelled yet' };
+  }
+
+  /** Hours of play to get `qty` of an item: what you have first, then the cheapest way to make or buy it. */
+  itemTime(item, qty) {
+    const need = Math.max(0, qty - (this.bank[item] || 0));
+    if (need <= 0) return { hours: 0, gp: 0, have: true };
+    const c = this.solveChains().costs.get(item);
+    if (!c) return { hours: Infinity, gp: 0, have: false, need };
+    return { hours: (c.t * need) / HOUR, gp: c.gp * need, have: false, need, via: c.via };
+  }
+
+  /** Status, progress and time left for one quest, plus what it rewards and unlocks. */
+  questInfo(qid) {
+    const Q = this.g.quests?.[qid];
+    if (!Q) return null;
+    const sv = this.p.quests?.[qid] || { state: 0, steps: {} };
+    const reqs = Q.r.map((r) => this.reqStatus(r));
+    const done = this.p.allGuild || sv.state >= 2;
+    const steps = [];
+    let hours = 0, gp = 0, unknown = false, current = null;
+    const trainNeed = new Map(); // skill -> highest level any remaining goal needs
+    for (const st of Q.steps) {
+      const ss = sv.steps?.[st.id];
+      const stepDone = done || (ss?.state ?? 0) >= 2;
+      const tasks = st.tasks.map((t) => {
+        const ts = ss?.tasks?.[t.id];
+        const goals = t.goals.map((gl0) => {
+          let gl = gl0;
+          const prog = Math.min(gl.q.n, ts?.goals?.[gl.id]?.progress ?? 0);
+          const complete = stepDone || !!ts?.goals?.[gl.id]?.complete || prog >= gl.q.n;
+          let est = null;
+          if (!complete) {
+            const g = this.goalPlan(gl.q.e, gl.q, gl.q.n - prog);
+            est = Number.isFinite(g.hours) ? g : null;
+            if (!est) gl = { ...gl, why: g.why };
+          }
+          return { ...gl, prog, complete, est };
+        });
+        const cost = t.cost.map(([it, q]) => ({ item: it, qty: q, ...((stepDone || ts?.costsMet) ? { hours: 0, have: true } : this.itemTime(it, q)) }));
+        return { ...t, goals, cost, done: stepDone || (ts?.state ?? 0) >= 2 };
+      });
+      if (!stepDone) {
+        if (!current) current = st.id;
+        for (const t of tasks) {
+          for (const gl of t.goals) {
+            if (gl.complete) continue;
+            if (!gl.est) { unknown = true; continue; }
+            const tr = gl.est.train || [];
+            hours += gl.est.hours - tr.reduce((a, x) => a + x.hours, 0); // the action itself
+            for (const x of tr) trainNeed.set(x.skill, Math.max(trainNeed.get(x.skill) || 0, x.level));
+          }
+          for (const c of t.cost) if (!c.have) { if (Number.isFinite(c.hours)) { hours += c.hours; gp += c.gp || 0; } else unknown = true; }
+          if (t.cond?.length) unknown = true;
+        }
+      }
+      steps.push({ ...st, tasks, done: stepDone });
+    }
+    const training = [...trainNeed.entries()].map(([skill, level]) => ({ skill, level, hours: this.planLevel(skill, level).hours }));
+    for (const t of training) hours += t.hours;
+    const rewardValue = Q.rw.items.reduce((a, [it, q]) => a + q * this.value(it), 0) + Q.rw.gp;
+    return {
+      id: qid, Q, state: sv.state, done, started: sv.state >= 1 || Object.values(sv.steps || {}).some((x) => x.state > 0),
+      available: reqs.every((r) => r.ok), reqs, steps, current, hours, gp, unknown, rewardValue, training,
+      unlocks: Q.unlocks,
+    };
+  }
+
+  /** Every quest with its status and time estimate, in game order. */
+  questList() {
+    if (this._cache.has('quests')) return this._cache.get('quests');
+    const out = Object.keys(this.g.quests || {}).map((id) => this.questInfo(id));
+    this._cache.set('quests', out);
+    return out;
   }
 
   /** Every task of a skill's mastery guild with status, progress and a time estimate. */
@@ -350,8 +455,8 @@ export class Engine {
     const C = this.g.combat;
     if (!C || !this.gearPool) return null;
     const lv = combatLevels(this.p, lvOverride || {});
-    const key = 'cp|' + eid + '|' + obj + '|' + Object.values(lv).join(',');
-    if (this._cache.has(key)) return this._cache.get(key);
+    const key = 'cp|' + eid + '|' + obj + '|' + Object.values(lv).join(',') + '|' + this.useMods;
+    if (this._combatCache.has(key)) return this._combatCache.get(key);
     const e = C.enemies[eid];
     const enemy = enemyFighter(e);
     const m = this.byId.get('Combat:' + eid);
@@ -387,7 +492,7 @@ export class Engine {
       res.gph = (HOUR / res.f.killMs) * (loot - this.inputCost(ins));
       res.ins = ins;
     }
-    this._cache.set(key, res);
+    this._combatCache.set(key, res);
     return res;
   }
 
@@ -395,7 +500,7 @@ export class Engine {
   withShop(extra) {
     const e = Object.create(Engine.prototype);
     Object.assign(e, this);
-    e.setPlayer(this.p, { extraShop: extra, useMods: true });
+    e.setPlayer(this.p, { extraShop: extra, useMods: true, keepCombat: true });
     return e;
   }
 
@@ -456,7 +561,12 @@ export class Engine {
         const ok = !!(this.tools[r.item] || this.bank[r.item]);
         return { ok, known: true, text: `${this.name(r.item)} equipped`, kind: 'tool', icon: this.items[r.item]?.i };
       }
-      case 'quest': return { ok: true, known: false, text: `Quest: ${r.id.replace(/([a-z])([A-Z0-9])/g, '$1 $2')}`, kind: 'quest' };
+      case 'quest': {
+        const text = `Quest: ${this.g.quests?.[r.id]?.n || r.id.replace(/([a-z])([A-Z0-9])/g, '$1 $2')}`;
+        if (this.p.allGuild) return { ok: true, known: true, text, kind: 'quest', id: r.id };
+        if (!this.p.quests) return { ok: true, known: false, text, kind: 'quest', id: r.id };
+        return { ok: (this.p.quests[r.id]?.state ?? 0) >= 2, known: true, text, kind: 'quest', id: r.id };
+      }
       case 'rank': {
         const gs = this.guild?.[r.s];
         const text = this.guildName(r.s, r.id);
@@ -694,7 +804,7 @@ export class Engine {
    * Self-sufficient chains (Dinkelbach): each input is either bought from the shop or
    * produced by your own unlocked methods, charging your time at lambda gp/ms.
    */
-  solveChains(unlocked = this.unlockedMethods()) {
+  solveChains(unlocked = this.unlockedMethods()) { // includes quest-only actions, so quest items can be made
     const key = 'chains';
     if (this._cache.has(key)) return this._cache.get(key);
     const cand = unlocked.filter((m) => m.k === 'active');
@@ -858,10 +968,11 @@ export class Engine {
     const key = 'ranked|' + mode + '|' + !!opts.includePassive + '|' + !!opts.sortTotal + '|' + (opts.window || '');
     let rows = this._cache.get(key);
     if (!rows) {
-      const unlocked = this.unlockedMethods();
+      const unlockedAll = this.unlockedMethods();
+      const unlocked = unlockedAll.filter((m) => !m.quest);
       rows = [];
       if (mode === 'chain' || mode === 'best') {
-        const { rates } = this.solveChains(unlocked);
+        const { rates } = this.solveChains(unlockedAll);
         for (const m of unlocked) {
           if (m.k === 'passive') continue;
           const c = rates.get(m.id);
@@ -922,7 +1033,7 @@ export class Engine {
   upcoming(limit = 18) {
     const out = [];
     for (const m of this.methods) {
-      if (m.k === 'passive') continue;
+      if (m.k === 'passive' || m.quest) continue;
       const st = this.status(m);
       if (st.unlocked || !st.onlyLevelLocked) continue;
       const lv = {};
@@ -956,7 +1067,7 @@ export class Engine {
     };
     const out = [];
     for (const m of this.methods) {
-      if (m.k === 'passive') continue;
+      if (m.k === 'passive' || m.quest) continue;
       const st = this.status(m);
       if (st.unlocked || !st.onlyLevelLocked || st.levelGap > maxGap) continue;
       const lv = { ...this.levels };
@@ -995,7 +1106,7 @@ export class Engine {
 
   /** For each bank item: what's the best thing to turn it into? */
   alchemy() {
-    const unlocked = this.unlockedMethods().filter((m) => m.k === 'active' && m.in.length);
+    const unlocked = this.unlockedMethods().filter((m) => m.k === 'active' && m.in.length && !m.quest);
     const res = [];
     for (const [item, qty] of Object.entries(this.bank)) {
       let best = null;
@@ -1078,7 +1189,7 @@ export class Engine {
     const lv = { ...this.levels, [skill]: level };
     const rows = [];
     for (const m of this.methods) {
-      if (m.s !== skill || m.k === 'passive') continue;
+      if (m.s !== skill || m.k === 'passive' || m.quest) continue;
       const st = this.status(m, lv);
       if (!st.unlocked) continue;
       const s = this.sellRate(m, lv);
@@ -1100,7 +1211,7 @@ export class Engine {
   combatTrainOptions(skill, level) {
     const rows = [];
     for (const m of this.unlockedMethods()) {
-      if (m.x?.t !== 'fight') continue;
+      if (m.x?.t !== 'fight' || m.quest) continue;
       const plan = this.combatPlan(m.rid, 'xp:' + skill, { [skill]: level });
       if (!plan) continue;
       const r = this.rate(m);
@@ -1246,7 +1357,7 @@ export class Engine {
       const b0 = base.get(sk);
       const alt = Object.create(Engine.prototype);
       Object.assign(alt, this);
-      alt.setPlayer(this.p, { extraShop: [], extraTools: [id], useMods: true });
+      alt.setPlayer(this.p, { extraShop: [], extraTools: [id], useMods: true, keepCombat: true });
       const b1 = bestOf(alt, sk);
       const m = b1.money?.m || b1.train?.m;
       if (!m) continue;
@@ -1323,6 +1434,123 @@ export class Engine {
     out.sort((a, b) => b.dGp - a.dGp);
     this._cache.set('gear', out);
     return out;
+  }
+
+  // ---------------------------------------------------------------- speedrun planner
+  /**
+   * A forward-simulated route: at each step pick the action that pays back its time fastest,
+   * resolving what it depends on (training, gold to save up, earlier quests, guild ranks).
+   * Training done for one step counts for later ones. Rates are "from scratch" (sustainable).
+   */
+  speedPlan({ horizon = 96, maxSteps = 14 } = {}) {
+    const key = 'speedplan|' + horizon;
+    if (this._cache.has(key)) return this._cache.get(key);
+    const start = this.ranked('chain')[0];
+    let best = start?.gph ?? 0;
+    let bestName = start?.m.n ?? '—';
+    let gold = this.p.wallet?.GoldPieces ?? this.p.header?.gp ?? 0;
+    const lvNow = { ...this.levels };
+    const hCache = new Map();
+    const H = (sk, lvl) => { // hours from your save's level to lvl (0 if already there)
+      if (lvl <= (this.levels[sk] ?? 1) || NOT_TRAINABLE.has(sk)) return 0;
+      const k = sk + lvl;
+      if (!hCache.has(k)) hCache.set(k, this.planLevel(sk, lvl).hours);
+      return hCache.get(k);
+    };
+    const trainCost = (needs) => needs.reduce((a, n) => a + Math.max(0, H(n.skill, n.level) - H(n.skill, lvNow[n.skill] ?? 1)), 0);
+    const cands = [];
+    // sustainable (from scratch) rate of the best method in a skill / against an enemy
+    const chainBest = new Map();
+    for (const x of this.ranked('chain')) {
+      if (!chainBest.has('skill:' + x.m.s)) chainBest.set('skill:' + x.m.s, x.gph);
+      chainBest.set('enemy:' + x.m.id, x.gph);
+    }
+
+    // 1) better methods behind levels
+    for (const x of this.betterUnlocks().list) {
+      cands.push({ kind: 'unlock', id: 'u:' + x.m.id, m: x.m, title: `Unlock ${x.m.n}`, needs: x.needs, actionHours: 0, gp: 0, newRate: x.gph,
+        why: `${x.m.s}${x.m.loc ? ' · ' + x.m.loc : ''}: ${Math.round(x.gph).toLocaleString('en-US')} gp/hr from scratch` });
+    }
+    // 2) shop upgrades (with their level requirements)
+    for (const a of this.upgradeAdvice()) {
+      if (!(a.dGp > 0)) continue;
+      const needs = a.missing.filter((m) => m.kind === 'lvl').map((m) => ({ skill: m.skill, level: m.need }));
+      cands.push({ kind: 'shop', id: 's:' + a.id, title: `Buy ${a.s.n}`, needs, actionHours: 0, gp: a.gpCost, items: a.s.ci, gain: a.dGp, skill: a.skill,
+        key: 'skill:' + a.skill, base: chainBest.get('skill:' + a.skill) ?? 0,
+        why: `+${Math.round(a.dGp).toLocaleString('en-US')} gp/hr on ${a.after?.money?.m.n || a.skill}` });
+    }
+    // 3) combat gear you can craft or buy
+    for (const g of this.gearAdvice()) {
+      const t = g.src === 'make' ? this.itemTime(g.id, 1) : { hours: 0, gp: g.price };
+      if (!Number.isFinite(t.hours)) continue;
+      cands.push({ kind: 'gear', id: 'g:' + g.id, title: `${g.src === 'make' ? 'Make' : 'Buy'} ${g.it.n}`, needs: [], actionHours: t.hours, gp: t.gp || 0, gain: g.dGp,
+        key: 'enemy:' + g.enemy.id, base: chainBest.get('enemy:' + g.enemy.id) ?? 0,
+        why: `+${Math.round(g.dGp).toLocaleString('en-US')} gp/hr fighting ${g.enemy.n}` });
+    }
+    // 4) quests: one-off rewards, and the shop upgrades / areas they unlock
+    const quests = this.questList();
+    for (const q of quests) {
+      if (q.done || !Number.isFinite(q.hours)) continue;
+      let gain = 0, gainWhy = '';
+      for (const [kind, id, name] of q.unlocks) {
+        if (kind !== 'shop' || !this.g.shop[id]?.b) continue;
+        const sk = [...new Set(this.g.shop[id].b.map(([, , , c]) => c.e).filter((x) => SKILL_ORDER.includes(x)))][0];
+        if (!sk) continue;
+        const alt = this.withShop([id]);
+        const d = (alt.ranked('best', { skill: sk })[0]?.gph ?? 0) - (this.ranked('best', { skill: sk })[0]?.gph ?? 0);
+        if (d > gain) { gain = d; gainWhy = `unlocks ${name} (+${Math.round(d).toLocaleString('en-US')} gp/hr)`; }
+      }
+      const prereq = q.Q.r.filter((r) => r.t === 'quest').map((r) => r.id);
+      cands.push({ kind: 'quest', id: 'q:' + q.id, q, title: `Quest: ${q.Q.n}`, unknown: q.unknown, needs: (q.training || []).map((t) => ({ skill: t.skill, level: t.level })),
+        actionHours: Math.max(0, q.hours - (q.training || []).reduce((a, t) => a + t.hours, 0)), gp: q.gp || 0, reward: q.rewardValue, gain, prereq,
+        why: [q.rewardValue > 0 ? `rewards worth ${Math.round(q.rewardValue).toLocaleString('en-US')} gold` : '', gainWhy, q.unlocks.filter((u) => u[0] === 'area').map((u) => 'opens ' + u[2]).join(', ')].filter(Boolean).join(' · ') });
+    }
+
+    const doneQ = new Set(quests.filter((q) => q.done).map((q) => q.id));
+    const rateOf = new Map(); // skill/enemy -> its best rate so far (upgrades on the same thing stack)
+    const newRateOf = (c) => (c.kind === 'unlock' ? c.newRate : c.key ? (rateOf.get(c.key) ?? c.base) + c.gain : 0);
+    const steps = [];
+    let time = 0;
+    const used = new Set();
+    for (let n = 0; n < maxSteps && time < horizon; n++) {
+      let pick = null;
+      for (const c of cands) {
+        if (used.has(c.id)) continue;
+        if (c.prereq && !c.prereq.every((id) => doneQ.has(id))) continue;
+        const train = trainCost(c.needs);
+        const short = Math.max(0, (c.gp || 0) - gold);
+        const earn = short > 0 ? (best > 0 ? short / best : Infinity) : 0;
+        const hours = train + c.actionHours + earn;
+        if (!Number.isFinite(hours) || time + hours > horizon * 1.5) continue;
+        const gain = Math.max(0, newRateOf(c) - best); // only what lifts your best rate counts
+        // one-off rewards count as gold earned faster than grinding
+        const oneOff = (c.reward || 0) - best * hours;
+        let score;
+        if (gain > 1) score = hours / gain; // hours of payback per gp/hr gained: lower is better
+        else if (oneOff > 0) score = -oneOff / Math.max(hours, 0.01) / 1e6; // beats grinding outright
+        else if (c.kind === 'quest') score = 1e6 + hours; // progression: only after everything that pays
+        else continue;
+        if (!pick || score < pick.score) pick = { c, hours, train, earn, gain, score };
+      }
+      if (!pick) break;
+      const { c } = pick;
+      used.add(c.id);
+      const trainSteps = c.needs.filter((x) => (lvNow[x.skill] ?? 1) < x.level).map((x) => ({ ...x, hours: Math.max(0, H(x.skill, x.level) - H(x.skill, lvNow[x.skill] ?? 1)) }));
+      for (const x of c.needs) lvNow[x.skill] = Math.max(lvNow[x.skill] ?? 1, x.level);
+      gold = Math.max(0, gold + best * pick.earn - (c.gp || 0)) + (c.reward || 0);
+      time += pick.hours;
+      const before = best;
+      const nr = newRateOf(c);
+      if (c.key) rateOf.set(c.key, nr);
+      if (nr > best) { best = nr; bestName = c.kind === 'unlock' ? c.m.n : c.kind === 'gear' ? c.why.replace(/^.*fighting /, '') : (c.skill || bestName); }
+      if (c.kind === 'quest') doneQ.add(c.q.id);
+      steps.push({ ...c, hours: pick.hours, earn: pick.earn, trainSteps, time, rateBefore: before, rateAfter: best, bestName });
+      // unlocks that no longer beat the new best are pointless now
+      for (const o of cands) if (o.kind === 'unlock' && o.newRate <= best) used.add(o.id);
+    }
+    const res = { steps, startRate: start?.gph ?? 0, startName: start?.m.n ?? '—', endRate: best, time };
+    this._cache.set(key, res);
+    return res;
   }
 
   // ---------------------------------------------------------------- items
