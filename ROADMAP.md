@@ -17,10 +17,10 @@ What players would pay for, ordered by value versus effort. Done items stay list
 - Combat gear advice: equippable gear from bank, crafting or shop that raises your best combat rate
 - Training counts input gathering/crafting time and XP from intermediate steps; thieving and combat food costs
 - Combat skill training: Attack/Strength/Defence/Hitpoints/Ranged routes with the best enemy and stance
+- Combat across all styles: per enemy, the best melee/ranged/magic loadout from owned gear (triangle, elements, spells, ammo and rune costs); XP training by matching style and stance; gear advice per enemy
 - Guild task planner: every task with live progress, time estimates, and the fastest set of tasks to the next rank (in Training)
 
 ## Up next, in order
-0. **Combat, all styles (in progress).** For every enemy, try melee, ranged and magic, building the best loadout from owned gear for that enemy (stance defences, combat triangle, elements, spells with rune costs, ammo). XP training only uses styles and stances that give that skill. Gear advice per enemy. Data (spells, triangle, elements, weapon and enemy elements) is already in game.json; combat.js and the engine still use equipped gear only.
 1. **Combat, part 2.** Slayer tasks and coins, dungeons, magic spells and special attacks.
 2. **More bonus sources.** Agility obstacles and astrology nodes.
 3. **Farming planner.** Per-plot profit per growth cycle with compost, the best crop for each plot type, and a timer-aware schedule.

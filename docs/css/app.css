@@ -836,3 +836,20 @@ dialog::backdrop { background: rgba(5, 6, 10, .6); backdrop-filter: blur(3px); }
 
 .gear-row { grid-template-columns: 34px minmax(0, 1fr) auto repeat(3, 96px); }
 @media (max-width: 860px) { .gear-row { grid-template-columns: 30px minmax(0, 1fr) 96px; } .gear-row > .pill, .gear-row .pot-k:nth-of-type(1), .gear-row .pot-k:nth-of-type(2) { display: none; } }
+
+.loadout { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.lo { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: rgba(0, 0, 0, .28); box-shadow: 0 0 0 1px var(--line) inset; cursor: pointer; }
+.lo img { width: 26px; height: 26px; }
+.lo.spell { box-shadow: 0 0 0 1px rgba(143, 184, 255, .35) inset; cursor: default; }
+.tag.style-melee { color: #ffb3a1; border-color: rgba(255, 138, 128, .25); }
+.tag.style-ranged { color: #a8e6a1; border-color: rgba(127, 224, 168, .25); }
+.tag.style-magic { color: #b9c8ff; border-color: rgba(143, 184, 255, .3); }
+.tag img { width: 12px; height: 12px; margin-right: 3px; }
+.fighter { grid-template-columns: 1fr; }
+.fg-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.fg-col { padding: 10px 12px; border-radius: 12px; background: rgba(0, 0, 0, .2); border: 1px solid var(--line); display: grid; gap: 8px; }
+.fg-h { display: flex; gap: 8px; align-items: center; }
+.fg-h img { width: 18px; height: 18px; }
+.fg-h .muted { margin-left: auto; font-size: 12px; }
+.fg-col .fg-gear { justify-content: flex-start; }
+@media (max-width: 760px) { .fg-cols { grid-template-columns: 1fr; } }

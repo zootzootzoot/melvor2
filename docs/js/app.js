@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611241141';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611241141';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611241141';
+import { decodeSave } from './save.js?v=202611242347';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611242347';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611242347';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -501,6 +501,7 @@ function methodRow(x, i, max) {
     state.mode === 'afk' && x.hours < state.window ? `<span class="warn-t">stock runs out after ${fmtDuration(x.hours)}</span>` : '',
     state.mode === 'afk' && x.shopOnly ? 'buys its inputs' : '',
     m.k === 'passive' ? 'per plot' : '',
+    x.r.extra?.loadout ? `${esc(x.r.extra.loadout.style)}${x.r.extra.loadout.gear.Weapon ? ` · ${esc(G().items[x.r.extra.loadout.gear.Weapon]?.n || '')}` : ''}${x.r.extra.loadout.spell ? ` · ${esc(G().combat.spells[x.r.extra.loadout.spell].n)}` : ''}` : '',
   ].filter(Boolean).join('<span class="sep">·</span>');
   const afk = state.mode === 'afk';
   const pct = Math.max(2, Math.min(100, ((afk ? x.total : x.gph) / max) * 100));
@@ -617,6 +618,19 @@ function details(x) {
   </div>`;
 }
 
+const STYLE_SKILL = { Melee: 'Attack', Ranged: 'Ranged', Magic: 'Magic' };
+function loadoutIcons(l, size = 22) {
+  if (!l) return '';
+  const g = G();
+  const order = ['Weapon', 'Ammo', 'Offhand', 'Helmet', 'Torso', 'Legs', 'Gloves', 'Boots', 'Amulet', 'Cape', 'RingSlot1', 'RingSlot2'];
+  const items = order.map((s) => l.gear[s]).filter(Boolean);
+  const spell = l.spell ? g.combat.spells[l.spell] : null;
+  return `<span class="loadout">${items.map((it) => `<span class="lo" data-item="${esc(it)}" title="${esc(g.items[it]?.n || it)}">${img(g.items[it]?.i, '', size)}</span>`).join('')}${spell ? `<span class="lo spell" title="${esc(spell.n)}">${img(spell.i, '', size)}</span>` : ''}</span>`;
+}
+function styleTag(style) {
+  return `<span class="tag style-${(style || '').toLowerCase()}">${img(skillIcon(STYLE_SKILL[style]), '', 12)}${esc(style || '')}</span>`;
+}
+
 function fightFacts(x, r) {
   const f = r.extra?.fight;
   if (!f) return '';
@@ -624,7 +638,12 @@ function fightFacts(x, r) {
   const st = G().combat.stances[f.stance];
   const foodHr = r.ins.find(([it]) => it === r.extra.food)?.[1] || 0;
   const danger = f.danger >= 0.5 ? 'red' : f.danger >= 0.25 ? 'warn' : 'green';
-  return `<div class="fact wide"><div class="k">The fight</div><div class="fight">
+  const l = r.extra?.loadout;
+  const notes = [];
+  if (f.triangle) notes.push(`${f.triangle > 0 ? '+' : ''}${fmtPct(f.triangle, 0)} max hit from the combat triangle (${esc(l?.style || '')} vs ${esc(f.enemyStyle)})`);
+  if (f.element) notes.push(`${f.element > 0 ? '+' : ''}${fmtPct(f.element, 0)} max hit from elements`);
+  return `<div class="fact wide"><div class="k">Best loadout from your gear ${l ? styleTag(l.style) : ''}</div>${loadoutIcons(l, 26)}${notes.length ? `<div class="muted" style="font-size:12px;margin-top:6px">${notes.join(' · ')}</div>` : ''}</div>
+  <div class="fact wide"><div class="k">The fight</div><div class="fight">
     <span><small>Your stance</small><b>${esc(st?.n || f.stance)}</b></span>
     <span><small>Hit chance</small><b class="num">${fmtPct(f.hc, 0)}</b></span>
     <span><small>Your max hit</small><b class="num">${fmtNum(f.mh)}</b></span>
@@ -636,16 +655,21 @@ function fightFacts(x, r) {
 
 function fighterBanner() {
   const e = E();
-  const F = e.fighter;
-  if (!F || state.explorer) return '';
+  const P = e.gearPool;
+  if (!P || state.explorer) return '';
   const g = G();
-  const w = F.weapon ? g.items[F.weapon] : null;
-  const gear = Object.values(state.save.equipment || {}).map((x) => x.item).filter((it) => g.items[it]);
+  const F = e.fighter;
+  const col = (style) => {
+    const ws = (P.weapons[style] || []).filter(Boolean);
+    const extra = style === 'Magic' ? (P.spells.length ? `${P.spells.length} spell${P.spells.length === 1 ? '' : 's'}` : 'no spells') : style === 'Ranged' ? `${(P.byType.Ammo || []).length} ammo` : '';
+    return `<div class="fg-col"><div class="fg-h">${img(skillIcon(STYLE_SKILL[style]), '', 18)}<b>${style}</b><span class="muted">${ws.length} weapon${ws.length === 1 ? '' : 's'}${extra ? ' · ' + extra : ''}</span></div>
+      <div class="fg-gear">${ws.slice(0, 8).map((it) => `<span data-item="${esc(it)}" title="${esc(g.items[it].n)}">${img(g.items[it].i, '', 26)}</span>`).join('') || '<span class="muted" style="font-size:12px">none</span>'}</div></div>`;
+  };
+  const armour = Object.entries(P.byType).filter(([t]) => t !== 'Ammo').reduce((a, [, v]) => a + v.length, 0);
   return `<div class="panel fighter">
-    <div class="fg-w">${img(w?.i || g.skills.Combat?.i, '', 40)}<div><b>${esc(w?.n || 'Unarmed')}</b><span class="muted">${esc(F.stances.map((x) => g.combat.stances[x]?.n || x).join(' / '))} · ${fmtMs(F.interval)} per attack</span></div></div>
-    <div class="fg-s"><span><small>HP</small><b class="num">${fmtNum(F.hp)}</b></span><span><small>Power</small><b class="num">${fmtNum(F.pow)}</b></span><span><small>Protection</small><b class="num">${fmtNum(F.prot)}</b></span><span><small>Food</small><b>${e.food ? esc(e.name(e.food)) : 'none'}</b></span></div>
-    <div class="fg-gear">${gear.map((it) => `<span data-item="${esc(it)}" title="${esc(g.items[it].n)}">${img(g.items[it].i, '', 26)}</span>`).join('')}</div>
-    <p class="muted fg-note">Rates use the gear you had equipped when you saved. Enemies that can hit you for 90% of your HP, or take over 20 minutes to kill, are left out. Special attacks, prayers, spells and slayer tasks are not modelled yet.</p>
+    <div class="fg-s"><span><small>HP</small><b class="num">${fmtNum(F?.hp || 0)}</b></span><span><small>Armour pieces</small><b class="num">${fmtNum(armour)}</b></span><span><small>Food</small><b>${e.food ? esc(e.name(e.food)) : 'none'}</b></span></div>
+    <div class="fg-cols">${['Melee', 'Ranged', 'Magic'].map(col).join('')}</div>
+    <p class="muted fg-note">Each enemy is fought with the best loadout from the gear you own, equipped or in your bank: melee, ranged or magic, picked against that enemy's defences, attack style and element. Ammo, runes and food count as costs. Fights where the enemy can hit you for 90% of your HP, or that take over 20 minutes per kill, are left out. Special attacks, prayers and slayer tasks are not modelled yet.</p>
   </div>`;
 }
 
@@ -722,7 +746,7 @@ function viewTrain() {
         <div class="panel stat"><div class="label">${img(g.currencies.GoldPieces, '', 16)}Gold along the way</div><div class="value num ${plan.gp < 0 ? 'red' : 'gold'}">${fmtGp(plan.gp, { sign: true })}</div><div class="sub">${plan.gp < 0 ? 'cost of supplies, net of what you make' : 'from selling what you make'}</div></div>
         <div class="panel stat"><div class="label">${svg.target}Methods</div><div class="value num">${plan.segs.length}</div><div class="sub">${plan.segs.length > 1 ? 'switch as new ones unlock' : 'one method all the way'}</div></div>
       </div>
-      ${plan.stuck ? `<div class="note">${svg.info}<span>${COMBAT_SKILLS.includes(sk) ? `Your equipped weapon (${esc(G().items[E().fighter?.weapon]?.n || 'unarmed')}) has no stance that gives ${sk} XP${sk === 'Ranged' ? ', or needs a bow and matching ammo' : sk === 'Defence' ? '. Weapons with a Block stance, such as swords and daggers, train Defence' : ''}. Combat training uses the gear from your save.` : `Nothing you can train is unlocked at level ${plan.stuck}. Check the requirements in Money makers.`}</span></div>` : ''}
+      ${plan.stuck ? `<div class="note">${svg.info}<span>${COMBAT_SKILLS.includes(sk) ? `None of the gear you own can train ${sk} on an enemy you can safely farm.${sk === 'Ranged' ? ' You need a ranged weapon and matching ammo.' : sk === 'Magic' ? ' You need a staff or wand and a spell you can cast (with its runes).' : sk === 'Defence' ? ' Defence comes from the Block stance (swords and daggers) or the Long Range and Defensive stances.' : ''} Gear in your bank counts, not just what you have equipped.` : `Nothing you can train is unlocked at level ${plan.stuck}. Check the requirements in Money makers.`}</span></div>` : ''}
       <div class="panel plan">
         <h4>Route</h4>
         ${plan.segs.map((x) => `
@@ -751,7 +775,7 @@ function viewTrain() {
           const need = atLevel < 99 ? xpForLevel(atLevel + 1) - (atLevel === cur.level ? cur.xp : xpForLevel(atLevel)) : 0;
           return `<div class="trow ${i === 0 ? 'top' : ''}" data-item="${esc(o.m.primary || '')}">
             <span class="ico">${img(methodIcon(o.m), '', 28)}</span>
-            <span class="title"><b>${esc(o.m.n)} ${o.src === 'bank' ? `<span class="tag green">from bank · ${fmtDuration(o.bankHours)}</span>` : o.src === 'scratch' ? '<span class="tag">makes inputs</span>' : ''}</b><span class="sub">${o.stance ? `${esc(G().combat.stances[o.stance]?.n || o.stance)} stance<span class="sep">·</span>${fmtMs(o.killMs)} per kill<span class="sep">·</span>${esc(o.m.loc || '')}` : `lvl ${o.m.lv}`}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.src === 'scratch' && o.scratch.steps.length ? `<span class="sep">·</span>${o.scratch.steps.slice(0, 3).map((st) => `${img(methodIcon(st.m), '', 14)}${Math.round(st.share * 60)}m`).join(' ')}` : o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
+            <span class="title"><b>${esc(o.m.n)} ${o.src === 'bank' ? `<span class="tag green">from bank · ${fmtDuration(o.bankHours)}</span>` : o.src === 'scratch' ? '<span class="tag">makes inputs</span>' : ''}</b><span class="sub">${o.stance ? `${esc(o.loadout?.style || '')} · ${esc(G().combat.stances[o.stance]?.n || o.stance)}${o.loadout?.gear.Weapon ? ` · ${esc(G().items[o.loadout.gear.Weapon]?.n || '')}` : ''}${o.loadout?.spell ? ` · ${esc(G().combat.spells[o.loadout.spell].n)}` : ''}<span class="sep">·</span>${fmtMs(o.killMs)} per kill<span class="sep">·</span>${esc(o.m.loc || '')}` : `lvl ${o.m.lv}`}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.src === 'scratch' && o.scratch.steps.length ? `<span class="sep">·</span>${o.scratch.steps.slice(0, 3).map((st) => `${img(methodIcon(st.m), '', 14)}${Math.round(st.share * 60)}m`).join(' ')}` : o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
             <span class="r num xpv" title="${esc(o.m.in.length ? `With inputs on hand: ${fmtGp(o.direct.xph)} xp/hr · making them yourself: ${o.scratch.feasible ? fmtGp(o.scratch.xph) : 'not possible yet'} xp/hr` : 'Gathering: no inputs needed')}">${fmtGp(o.xph)}</span>
             <span class="r num ${o.gph < 0 ? 'red' : 'green'}">${fmtGp(o.gph, { sign: true })}</span>
             <span class="r num muted">${atLevel < 99 ? fmtDuration(need / o.xph) : '—'}</span>
@@ -881,16 +905,16 @@ function gearSection() {
   const list = e.gearAdvice();
   if (!list.length) return '';
   const g = G();
-  return `<div class="section-sub" style="margin-top:26px"><h4>Combat gear worth getting</h4><span class="muted" style="font-size:13px">Gear you can equip now and can get from your bank, by crafting, or from the shop, measured on your best combat money maker from scratch.</span></div>
+  return `<div class="section-sub" style="margin-top:26px"><h4>Combat gear worth getting</h4><span class="muted" style="font-size:13px">Gear you can equip but don't own yet, and can craft or buy. Each piece is tested in the best loadout against your top combat targets, and shown for the enemy it helps most.</span></div>
   <div class="pot-list stagger">${list.map((x) => {
     const src = x.src === 'bank' ? '<span class="pill green">in your bank</span>' : x.src === 'make' ? `<span class="pill">make: ${esc(x.via?.s || '')} · ${esc(x.via?.n || '')}</span>` : `<span class="pill">shop · ${fmtGp(x.price)}</span>`;
     return `<div class="pot-row gear-row" data-item="${esc(x.id)}">
       ${img(x.it.i, '', 32)}
-      <div class="title"><b>${esc(x.it.n)}</b><span class="sub">${esc(x.slot.replace(/Slot\d/, ''))}${x.cur ? `<span class="sep">·</span>replaces ${esc(g.items[x.cur]?.n || x.cur)}` : '<span class="sep">·</span>empty slot'}</span></div>
+      <div class="title"><b>${esc(x.it.n)}</b><span class="sub">${esc((x.slot || '').replace(/Slot\d/, ''))}${x.cur ? `<span class="sep">·</span>replaces ${esc(g.items[x.cur]?.n || x.cur)}` : '<span class="sep">·</span>empty slot'}<span class="sep">·</span>for ${esc(x.enemy.n)} (${esc(x.style)}${x.style !== x.styleBefore ? `, instead of ${esc(x.styleBefore)}` : ''})</span></div>
       ${src}
       <div class="pot-k"><small>kill time</small><b class="num">${fmtMs(x.killAfter)}</b></div>
       <div class="pot-k"><small>damage taken</small><b class="num ${x.takenAfter < x.takenBefore ? 'green' : ''}">${x.takenBefore > 0 ? fmtPct(x.takenAfter / x.takenBefore - 1, 0) : '—'}</b></div>
-      <div class="pot-k"><small>best combat</small><b class="num gold">+${fmtGp(x.dGp)}/hr</b></div>
+      <div class="pot-k"><small>gold / hr</small><b class="num gold">+${fmtGp(x.dGp)}</b></div>
     </div>`;
   }).join('')}</div>`;
 }

@@ -3,36 +3,55 @@
 //  hit chance       = acc >= eva ? 1 - eva / (2 acc) : acc / (2 eva)
 //  max hit (melee/ranged) = floor(22 + L + (L + 17) * strengthBonus / 64)
 //  max hit (magic)        = floor(spellMaxHit * (1 + damageBonus) * (1 + (L + 1) / 200))
+//  final max hit          = floor(base * (1 + element bonus) * (1 + combat triangle))
 //  damage roll uniform in [1, maxHit], reduced by resistance = clamp(prot / (pow + prot), 0, 0.7), then armour, min 1
-//  enemies respawn after 3 s; HP = Hitpoints level x 10.
+//  your resistance is also scaled by the combat triangle; enemies respawn after 3 s; HP = Hitpoints level x 10.
 
 export const SPAWN_MS = 3000;
+export const STYLES = ['Melee', 'Ranged', 'Magic'];
 const COMBAT_LEVELS = ['Hitpoints', 'Attack', 'Strength', 'Defence', 'Ranged', 'Magic'];
+const ARMOUR_SLOTS = ['Torso', 'Legs', 'Helmet', 'Offhand', 'Boots', 'Gloves', 'Amulet', 'Cape', 'RingSlot1', 'RingSlot2'];
+const SLOT_TYPE = { RingSlot1: 'Ring', RingSlot2: 'Ring' };
 
 const ratio = (list, lv) => list.reduce((a, [k, r]) => a + (lv[k] ?? 1) * r, 0);
 
-export function playerFighter(g, save) {
+export function combatLevels(save, override = {}) {
   const lv = {};
-  for (const k of COMBAT_LEVELS) lv[k] = save.skills?.[k]?.level ?? (k === 'Hitpoints' ? 10 : 1);
+  for (const k of COMBAT_LEVELS) lv[k] = override[k] ?? save.skills?.[k]?.level ?? (k === 'Hitpoints' ? 10 : 1);
+  return lv;
+}
+
+/** A fighter from an explicit loadout: { slot: item } plus an optional spell. */
+export function makeFighter(g, lv, gear, spell = null) {
+  const C = g.combat;
   const st = {};
   let pow = 0, prot = 0;
-  const eq = save.equipment || {};
-  for (const { item } of Object.values(eq)) {
-    const e = g.items[item]?.eq;
+  for (const item of Object.values(gear)) {
+    const e = item && g.items[item]?.eq;
     if (!e) continue;
     for (const [k, v] of Object.entries(e.st)) st[k] = (st[k] || 0) + v;
     pow += e.pow; prot += e.prot;
   }
-  const weapon = eq.Weapon?.item || null;
-  const wtype = g.items[weapon]?.wp?.type || 'Melee';
-  const stances = g.combat.weapons[wtype] || g.combat.weapons.Melee || ['Stab'];
-  const ammoNeeded = g.items[weapon]?.wp?.ammo || null;
-  const ammo = eq.Ammo?.item && g.items[eq.Ammo.item]?.eq?.ammo === ammoNeeded ? eq.Ammo.item : null;
-  return { lv, st, pow: Math.max(1, pow), prot, stances, interval: st.AttackInterval || 3000, hp: lv.Hitpoints * 10, weapon, wtype, ammoNeeded, ammo, ammoQty: eq.Ammo?.qty || 0 };
+  const weapon = gear.Weapon || null;
+  const wp = g.items[weapon]?.wp;
+  const stances = C.weapons[wp?.type || 'Melee'] || C.weapons.Melee || ['Stab'];
+  const style = C.stances[stances[0]]?.style || 'Melee';
+  let el = (wp?.el || []).find((x) => x !== 'Neutral') || 'Neutral';
+  if (style === 'Magic' && spell) {
+    for (const [k, v] of Object.entries(C.spells[spell].st)) st[k] = (st[k] || 0) + v;
+    el = C.spells[spell].el || el;
+  }
+  return { lv, st, pow: Math.max(1, pow), prot, stances, style, el, interval: st.AttackInterval || 3000, hp: lv.Hitpoints * 10, weapon, gear, spell, ammo: gear.Ammo || null };
+}
+
+/** The fighter you saved with (equipped gear, no spell selection). */
+export function playerFighter(g, save) {
+  const gear = Object.fromEntries(Object.entries(save.equipment || {}).map(([slot, x]) => [slot, x.item]));
+  return makeFighter(g, combatLevels(save), gear);
 }
 
 export function enemyFighter(e) {
-  return { lv: e.lv, st: e.st, pow: Math.max(1, e.pow), prot: e.prot, stances: e.stances, interval: e.st.AttackInterval || 3000, hp: (e.lv.Hitpoints ?? 1) * 10 };
+  return { lv: e.lv, st: e.st, pow: Math.max(1, e.pow), prot: e.prot, stances: e.stances, interval: e.st.AttackInterval || 3000, hp: (e.lv.Hitpoints ?? 1) * 10, el: e.el || 'Neutral' };
 }
 
 function rating(C, f, stance, kind) {
@@ -54,20 +73,26 @@ export const resistance = (pow, prot) => Math.min(0.7, Math.max(0, prot / (pow +
 /** Expected damage of a uniform [1, max] roll after resistance and armour (min 1). */
 function avgDamage(max, res, armour = 0) {
   if (max <= 0) return 0;
-  if (max > 4000) return Math.max(1, ((1 + max) / 2) * (1 - res) - armour);
+  if (max > 300) return Math.max(1, ((1 + max) / 2) * (1 - res) - armour);
   let s = 0;
   for (let d = 1; d <= max; d++) s += Math.max(1, Math.floor(d * (1 - res)) - armour);
   return s / max;
 }
 
-/** One player-vs-enemy matchup: best stance, kill time, damage taken, XP and danger. */
+const enemyStyle = (C, enemy) => C.stances[enemy.stances[0]?.[0]]?.style || 'Melee';
+
+/** One player-vs-enemy matchup: best stance (or `only`), kill time, damage taken, XP and danger. */
 export function fight(C, player, enemy, only = null) {
+  const eStyle = enemyStyle(C, enemy);
+  const tri = C.triangle?.[player.style + '|' + eStyle] || {};
+  const elem = C.elements?.[player.el + '|' + enemy.el] || 0;
   let best = null;
   for (const stance of only ? [only] : player.stances) {
     const s = C.stances[stance];
     if (!s) continue;
-    const mh = maxHit(C, player, s.style);
-    if (mh <= 0) continue;
+    const base = maxHit(C, player, s.style);
+    if (base <= 0) continue;
+    const mh = Math.max(1, Math.floor(base * (1 + elem) * (1 + (tri.MaxHitCombatTriangle || 0))));
     const hc = hitChance(rating(C, player, stance, 'acc'), rating(C, enemy, stance, 'eva'));
     const dmg = avgDamage(mh, resistance(player.pow, enemy.prot), enemy.st.Armour || 0);
     const dps = (hc * dmg) / player.interval;
@@ -75,23 +100,25 @@ export function fight(C, player, enemy, only = null) {
   }
   if (!best || best.dps <= 0) return null;
   const aliveMs = enemy.hp / best.dps;
-  // the enemy's attacks against you while it is alive
   const tot = enemy.stances.reduce((a, [, w]) => a + w, 0) || 1;
+  const res = Math.min(1, Math.max(0, resistance(enemy.pow, player.prot) * (1 + (tri.ResistanceCombatTriangle || 0))));
   let inMs = 0, enemyMax = 0;
   for (const [stance, w] of enemy.stances) {
     const s = C.stances[stance];
     if (!s) continue;
     const mh = maxHit(C, enemy, s.style);
-    const res = resistance(enemy.pow, player.prot);
     const hc = hitChance(rating(C, enemy, stance, 'acc'), rating(C, player, stance, 'eva'));
     inMs += (w / tot) * hc * avgDamage(mh, res, player.st.Armour || 0) / enemy.interval;
     enemyMax = Math.max(enemyMax, Math.max(1, Math.floor(mh * (1 - res)) - (player.st.Armour || 0)));
   }
   const xp = (C.stances[best.stance].xp || []).map(([sk, per]) => [sk, per * enemy.hp]);
-  return { ...best, aliveMs, killMs: aliveMs + SPAWN_MS, takenPerKill: inMs * aliveMs, enemyMax, danger: enemyMax / player.hp, attacks: aliveMs / player.interval, xp };
+  return {
+    ...best, aliveMs, killMs: aliveMs + SPAWN_MS, takenPerKill: inMs * aliveMs, enemyMax, danger: enemyMax / player.hp,
+    attacks: aliveMs / player.interval, xp, triangle: tri.MaxHitCombatTriangle || 0, element: elem, enemyStyle: eStyle,
+  };
 }
 
-/** Expected drops per kill: [[item, qty]], gold, other currencies. */
+/** Expected drops per kill: [[item, qty]], gold. */
 export function dropsPerKill(e) {
   const out = new Map();
   const add = (it, q) => out.set(it, (out.get(it) || 0) + q);
@@ -108,4 +135,99 @@ export function dropsPerKill(e) {
 export function SLOT_OF(type, eq = {}) {
   if (type === 'Ring') return !eq.RingSlot1 ? 'RingSlot1' : !eq.RingSlot2 ? 'RingSlot2' : 'RingSlot1';
   return ['Helmet', 'Cape', 'Amulet', 'Ammo', 'Weapon', 'Torso', 'Offhand', 'Legs', 'Gloves', 'Boots'].includes(type) ? type : null;
+}
+
+/**
+ * Everything you could fight with: equipped gear plus equipment in your bank (and any `extra`
+ * items), filtered by `ok(item)` (equip requirements), and the spells you can cast.
+ */
+export function gearPool(g, save, ok, extra = [], spellOk = () => true) {
+  const C = g.combat;
+  const ids = new Set([...Object.values(save.equipment || {}).map((x) => x.item), ...Object.keys(save.bank || {}), ...extra]);
+  const byType = {};
+  const weapons = { Melee: [], Ranged: [], Magic: [] };
+  for (const id of ids) {
+    const e = g.items[id]?.eq;
+    if (!e || !ok(id)) continue;
+    if (e.slot === 'Weapon') {
+      const stances = C.weapons[g.items[id].wp?.type] || [];
+      const style = C.stances[stances[0]]?.style;
+      if (style) weapons[style].push(id);
+    } else (byType[e.slot] ||= []).push(id);
+  }
+  if (!weapons.Melee.length) weapons.Melee.push(null); // fists
+  const spells = Object.entries(C.spells || {}).filter(([, sp]) => sp.book === 'StandardSpells' && spellOk(sp)).map(([id]) => id);
+  return { byType, weapons, spells };
+}
+
+function weaponScore(g, id) {
+  const st = g.items[id]?.eq?.st || {};
+  const acc = Math.max(0, ...Object.entries(st).filter(([k]) => /AttackBonus$/.test(k)).map(([, v]) => v));
+  const str = (st.MeleeStrengthBonus || 0) + (st.RangedStrengthBonus || 0) + (st.MagicDamageBonus || 0) * 100;
+  return ((64 + acc) * (64 + str)) / (st.AttackInterval || 3000);
+}
+
+/**
+ * Best loadout against one enemy for an objective. `score(f, fighter)` returns a number
+ * (higher is better) or null when the fight isn't viable. Tries every style; per style the top
+ * weapons (with matching ammo or spells), then improves each armour slot in turn.
+ */
+export function bestLoadout(g, pool, lv, enemy, score, startGear = {}, weaponOk = null) {
+  const C = g.combat;
+  const evalF = (gear, spell) => {
+    const p = makeFighter(g, lv, gear, spell);
+    const f = fight(C, p, enemy);
+    if (!f) return { s: -Infinity, f: null, p };
+    const v = score(f, p);
+    // not viable (too dangerous / too slow): rank by how close it is, so armour can still fix it
+    return { s: v == null ? -1e12 - f.danger * 1e9 - f.killMs : v, ok: v != null, f, p };
+  };
+  let best = null;
+  for (const style of STYLES) {
+    let weapons = (pool.weapons[style] || []).filter((w) => !weaponOk || weaponOk(w));
+    if (!weapons.length) continue;
+    weapons = weapons.slice().sort((a, b) => weaponScore(g, b) - weaponScore(g, a)).slice(0, 3);
+    for (const w of weapons) {
+      const wp = g.items[w]?.wp;
+      const gear = {};
+      for (const slot of ARMOUR_SLOTS) if (startGear[slot] && (pool.byType[SLOT_TYPE[slot] || slot] || []).includes(startGear[slot])) gear[slot] = startGear[slot];
+      if (w) gear.Weapon = w;
+      const occ = g.items[w]?.eq?.occ || [];
+      for (const o of occ) delete gear[o];
+      if (wp?.ammo) {
+        const ammo = (pool.byType.Ammo || []).filter((a) => g.items[a].eq.ammo === wp.ammo)
+          .sort((a, b) => (g.items[b].eq.st.RangedStrengthBonus || 0) - (g.items[a].eq.st.RangedStrengthBonus || 0))[0];
+        if (!ammo) continue;
+        gear.Ammo = ammo;
+      }
+      let spells = [null];
+      if (style === 'Magic') {
+        spells = pool.spells.slice().sort((a, b) => {
+          const ea = C.elements?.[C.spells[a].el + '|' + enemy.el] || 0, eb = C.elements?.[C.spells[b].el + '|' + enemy.el] || 0;
+          return (C.spells[b].st.SpellMaxHit || 0) * (1 + eb) - (C.spells[a].st.SpellMaxHit || 0) * (1 + ea);
+        }).slice(0, 2);
+        if (!spells.length) continue;
+      }
+      for (const spell of spells) {
+        let cur = evalF(gear, spell);
+        for (let pass = 0; pass < 2; pass++) {
+          let changed = false;
+          for (const slot of ARMOUR_SLOTS) {
+            if (occ.includes(slot)) continue;
+            const cands = (pool.byType[SLOT_TYPE[slot] || slot] || []).filter((it) => !Object.entries(gear).some(([s2, x]) => s2 !== slot && x === it));
+            for (const it of [undefined, ...cands]) {
+              if (gear[slot] === it) continue;
+              const g2 = { ...gear };
+              if (it === undefined) delete g2[slot]; else g2[slot] = it;
+              const r = evalF(g2, spell);
+              if (r.s > cur.s + 1e-9) { cur = r; gear[slot] = it; if (it === undefined) delete gear[slot]; changed = true; }
+            }
+          }
+          if (!changed) break;
+        }
+        if (cur.f && (!best || cur.s > best.s)) best = { ...cur, style, gear: { ...gear }, spell };
+      }
+    }
+  }
+  return best && best.ok ? best : null;
 }

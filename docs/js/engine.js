@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF } from './combat.js?v=202611241141';
+import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611242347';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -14,7 +14,7 @@ export const SKILL_ORDER = [
 /** "Skills" in SKILL_ORDER that have no level of their own to train. */
 export const NOT_TRAINABLE = new Set(['Combat', 'Farming', 'Ranching']);
 /** Combat skills trained by fighting (XP per damage dealt, by stance). */
-export const COMBAT_SKILLS = ['Attack', 'Strength', 'Defence', 'Hitpoints', 'Ranged'];
+export const COMBAT_SKILLS = ['Attack', 'Strength', 'Defence', 'Hitpoints', 'Ranged', 'Magic'];
 /** Skills whose methods run passively (per plot / per animal), so they aren't trained or ranked as actions. */
 export const PASSIVE_SKILLS = new Set(['Farming', 'Ranching']);
 
@@ -140,7 +140,7 @@ export class Engine {
   name(item) { return this.items[item]?.n ?? item; }
 
   // ---------------------------------------------------------------- player
-  setPlayer(p, { extraShop = [], extraTools = [], useMods = this.useMods } = {}) {
+  setPlayer(p, { extraShop = [], extraTools = [], extraGear = [], useMods = this.useMods } = {}) {
     this.p = p;
     this.useMods = useMods;
     this.levels = {};
@@ -154,6 +154,9 @@ export class Engine {
     this._rateCache = new Map();
     this.computeGuilds(p);
     this.fighter = this.g.combat ? playerFighter(this.g, p) : null;
+    this.extraGear = extraGear;
+    this.gearPool = this.g.combat ? gearPool(this.g, p, (id) => (this.items[id].eq.r || []).every((q) => this.reqStatus(q).ok), extraGear,
+      (sp) => (sp.r || []).every((q) => this.reqStatus(q).ok)) : null;
     // food: the cheapest heal per gold you have in the bank, else Shrimp
     const foods = Object.keys(this.bank).filter((it) => this.items[it]?.heal > 0).sort((a, b) => this.value(a) / this.items[a].heal - this.value(b) / this.items[b].heal);
     this.food = foods[0] || (this.items.Shrimp?.heal ? 'Shrimp' : null);
@@ -319,6 +322,73 @@ export class Engine {
 
   guildName(skill, rank) {
     return this.g.guild?.[skill]?.rankNames?.[rank] || String(rank).replace(/([a-z])([A-Z])/g, '$1 $2');
+  }
+
+  /** Items used up per kill: food for the damage you take, ammo per attack, runes per cast. */
+  combatInputs(f, p) {
+    const ins = [];
+    if (this.food && f.takenPerKill > 0) ins.push([this.food, f.takenPerKill / this.items[this.food].heal]);
+    if (p.ammo) ins.push([p.ammo, f.attacks]);
+    if (p.spell) for (const [it, q] of this.g.combat.spells[p.spell].runes) ins.push([it, q * f.attacks]);
+    return ins;
+  }
+
+  inputCost(ins) {
+    return ins.reduce((a, [it, q]) => {
+      const v = this.value(it), b = this.buyPrice(it);
+      return a + q * (this.bank[it] ? v : Number.isFinite(b) ? Math.min(b, v || b) : v);
+    }, 0);
+  }
+
+  /**
+   * Best loadout from your gear against one enemy, across melee, ranged and magic.
+   * obj = 'money' (gold per hour after food/ammo/runes) or 'xp:<Skill>' (that skill's XP per hour,
+   * only from stances that give it). Fights you can't survive (enemy max hit >= 90% of your HP) or
+   * that take over 20 minutes per kill don't count.
+   */
+  combatPlan(eid, obj = 'money', lvOverride = null) {
+    const C = this.g.combat;
+    if (!C || !this.gearPool) return null;
+    const lv = combatLevels(this.p, lvOverride || {});
+    const key = 'cp|' + eid + '|' + obj + '|' + Object.values(lv).join(',');
+    if (this._cache.has(key)) return this._cache.get(key);
+    const e = C.enemies[eid];
+    const enemy = enemyFighter(e);
+    const m = this.byId.get('Combat:' + eid);
+    const loot = (m?.out || []).reduce((a, [it, q]) => a + q * this.value(it), 0) + (m?.gp || 0);
+    const viable = (f) => f.danger < 0.9 && f.killMs <= 20 * 60000;
+    const xpMult = m ? 1 + this.mod(m, 'PercentXPGained', null, 'Experience') : 1;
+    let score;
+    const skill = obj.startsWith('xp:') ? obj.slice(3) : null;
+    const xpOf = (p) => {
+      let best = null;
+      for (const stance of p.stances) {
+        const per = (C.stances[stance]?.xp || []).find(([sk]) => sk === skill)?.[1];
+        if (!per) continue;
+        const f = fight(C, p, enemy, stance);
+        if (!f || !viable(f)) continue;
+        const xph = per * enemy.hp * (HOUR / f.killMs) * xpMult;
+        if (!best || xph > best.xph) best = { f, xph, stance };
+      }
+      return best;
+    };
+    if (skill) score = (f, p) => xpOf(p)?.xph ?? null;
+    else score = (f, p) => (viable(f) ? (HOUR / f.killMs) * (loot - this.inputCost(this.combatInputs(f, p))) : null);
+    const start = Object.fromEntries(Object.entries(this.p.equipment || {}).map(([slot, x]) => [slot, x.item]));
+    // for XP, only weapons with a stance that gives this skill's XP
+    const weaponOk = skill ? (w) => (C.weapons[this.items[w]?.wp?.type || 'Melee'] || []).some((st) => (C.stances[st]?.xp || []).some(([sk]) => sk === skill)) : null;
+    let res = bestLoadout(this.g, this.gearPool, lv, enemy, score, start, weaponOk);
+    if (res && skill) {
+      const x = xpOf(res.p);
+      res = x ? { ...res, f: x.f, xph: x.xph, stance: x.stance } : null;
+    }
+    if (res) {
+      const ins = this.combatInputs(res.f, res.p);
+      res.gph = (HOUR / res.f.killMs) * (loot - this.inputCost(ins));
+      res.ins = ins;
+    }
+    this._cache.set(key, res);
+    return res;
   }
 
   /** Clone with extra hypothetical shop purchases (for the upgrade advisor). */
@@ -578,18 +648,16 @@ export class Engine {
     } else if (x.t === 'fight') {
       const C = this.g.combat;
       const e = C.enemies[x.e];
-      const f = this.fighter && fight(C, this.fighter, enemyFighter(e));
-      if (!f) return { m, succ: 1, ms: 1e12, aph: 0, outs: [], ins: [], gp: 0, xp: 0, outValue: 0, extra: {}, blocked: 'You cannot damage this enemy with your current weapon' };
+      const plan = this.combatPlan(x.e, 'money');
+      if (!plan) return { m, succ: 1, ms: 1e12, aph: 0, outs: [], ins: [], gp: 0, xp: 0, outValue: 0, extra: {}, blocked: 'None of your gear can farm this safely' };
+      const f = plan.f;
       ms = f.killMs;
       for (const [it, q] of m.out) add(it, q);
       gp = m.gp;
       xp = f.xp.reduce((a, [, v]) => a + v, 0);
-      ins = [];
-      if (this.food && f.takenPerKill > 0) ins.push([this.food, f.takenPerKill / this.items[this.food].heal]);
-      if (this.fighter.ammo) ins.push([this.fighter.ammo, f.attacks]);
-      extra = { fight: f, food: this.food };
-      const blocked = f.danger >= 0.9 ? 'Can hit you for most of your HP in one blow' : f.killMs > 20 * 60000 ? 'Takes over 20 minutes per kill' : (this.fighter.ammoNeeded && !this.fighter.ammo) ? 'Your weapon needs ammo' : null;
-      if (blocked) extra.blocked = blocked;
+      ins = this.combatInputs(f, plan.p);
+      extra = { fight: f, food: this.food, loadout: plan };
+      void e;
     } else if (x.t === 'fm') {
       ms = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
       const pres = clamp01(M('PreservationChance'));
@@ -1028,33 +1096,17 @@ export class Engine {
     return rows;
   }
 
-  /** Enemies ranked by XP/hr for one combat skill, using the stance that trains it best. */
+  /** Enemies ranked by XP/hr for one combat skill: best style, loadout and stance that give that XP. */
   combatTrainOptions(skill, level) {
-    const C = this.g.combat;
-    if (!C) return [];
-    const p2 = { ...this.p, skills: { ...this.p.skills, [skill]: { xp: xpForLevel(level), level } } };
-    const fighter = playerFighter(this.g, p2);
     const rows = [];
     for (const m of this.unlockedMethods()) {
       if (m.x?.t !== 'fight') continue;
-      const e = enemyFighter(C.enemies[m.rid]);
-      let best = null;
-      for (const stance of fighter.stances) {
-        const per = (C.stances[stance]?.xp || []).find(([s]) => s === skill)?.[1];
-        if (!per) continue;
-        const f = fight(C, fighter, e, stance);
-        if (!f || f.danger >= 0.9 || f.killMs > 20 * 60000) continue;
-        const kph = HOUR / f.killMs;
-        const xph = per * e.hp * kph * (1 + this.mod(m, 'PercentXPGained', null, 'Experience'));
-        if (!best || xph > best.xph) best = { f, xph, kph, stance };
-      }
-      if (!best) continue;
-      const loot = m.out.reduce((a, [it, q]) => a + q * this.value(it), 0) + m.gp;
-      const food = this.food ? (best.f.takenPerKill / this.items[this.food].heal) * this.value(this.food) : 0;
-      const gph = (loot - food) * best.kph;
+      const plan = this.combatPlan(m.rid, 'xp:' + skill, { [skill]: level });
+      if (!plan) continue;
       const r = this.rate(m);
-      rows.push({ m, xph: best.xph, gph, r, direct: { xph: best.xph, gph }, scratch: { feasible: true, xph: best.xph, gph, steps: [], made: [], xpBy: [[skill, best.xph]], share: 1 },
-        bankHours: Infinity, src: 'gather', stance: best.stance, killMs: best.f.killMs });
+      rows.push({ m, xph: plan.xph, gph: plan.gph, r, direct: { xph: plan.xph, gph: plan.gph },
+        scratch: { feasible: true, xph: plan.xph, gph: plan.gph, steps: [], made: [], xpBy: [[skill, plan.xph]], share: 1 },
+        bankHours: Infinity, src: 'gather', stance: plan.stance, killMs: plan.f.killMs, loadout: plan });
     }
     rows.sort((a, b) => b.xph - a.xph);
     return rows;
@@ -1213,53 +1265,59 @@ export class Engine {
   }
 
   /**
-   * Combat gear you could equip and get (bank, craft, or shop) that raises your best combat gold/hr.
-   * Screens every candidate on the enemy you farm best, then re-ranks all of combat for the top few per slot.
+   * Gear you could craft or buy that would improve one of your best fights. Situational: each
+   * suggestion is tied to the enemy and style it helps, measured by re-optimising that fight's
+   * loadout with the new piece available.
    */
   gearAdvice() {
     if (this._cache.has('gear')) return this._cache.get('gear');
     const C = this.g.combat;
     const out = [];
-    const base = this.ranked('chain', { skill: 'Combat' })[0];
-    if (!C || !this.fighter || !base) { this._cache.set('gear', out); return out; }
-    const eqNow = this.p.equipment || {};
+    const top = this.ranked('chain', { skill: 'Combat' }).slice(0, 4);
+    if (!C || !this.gearPool || !top.length) { this._cache.set('gear', out); return out; }
+    const owned = new Set([...Object.values(this.gearPool.byType).flat(), ...Object.values(this.gearPool.weapons).flat()]);
     const makeable = new Map();
     for (const m of this.unlockedMethods()) if (m.s !== 'Combat') for (const [it] of m.out) if (!makeable.has(it) || m.primary === it) makeable.set(it, m);
-    const enemy = enemyFighter(C.enemies[base.m.rid]);
-    const f0 = fight(C, this.fighter, enemy);
-    const withGear = (slot, item) => {
-      const eq = { ...eqNow, [slot]: { item, qty: 1 } };
-      for (const o of this.items[item].eq.occ || []) delete eq[o];
-      if (slot === 'Offhand' && eqNow.Weapon && (this.items[eqNow.Weapon.item]?.eq?.occ || []).includes('Offhand')) return null;
-      return { ...this.p, equipment: eq };
-    };
-    const bySlot = new Map();
+    const statSum = (id) => Object.entries(this.items[id].eq.st).reduce((a, [k, v]) => a + (k === 'AttackInterval' ? 0 : k === 'MagicDamageBonus' ? v * 100 : v), 0) + this.items[id].eq.pow / 20 + this.items[id].eq.prot / 10;
+    // candidates: equippable, obtainable, not owned, and not worse on every stat than something you own in that slot
+    const byType = new Map();
     for (const [id, it] of Object.entries(this.items)) {
       const e = it.eq;
-      const slot = e && SLOT_OF(e.slot, eqNow);
-      if (!slot || eqNow[slot]?.item === id || slot === 'Ammo') continue;
-      if (!e.r.every((q) => this.reqStatus(q).ok)) continue;
-      const src = this.bank[id] > 0 ? 'bank' : makeable.has(id) ? 'make' : Number.isFinite(this.buyPrice(id)) ? 'buy' : null;
+      if (!e || owned.has(id) || e.slot === 'Ammo') continue;
+      if (!(e.r || []).every((q) => this.reqStatus(q).ok)) continue;
+      const src = makeable.has(id) ? 'make' : Number.isFinite(this.buyPrice(id)) ? 'buy' : null;
       if (!src) continue;
-      const p2 = withGear(slot, id);
-      if (!p2) continue;
-      const f1 = fight(C, playerFighter(this.g, p2), enemy);
-      if (!f1 || !f0) continue;
-      const score = f0.killMs / f1.killMs + (f0.takenPerKill - f1.takenPerKill) / Math.max(1, f0.takenPerKill) * 0.25;
-      if (score <= 1.005) continue;
-      if (!bySlot.has(slot)) bySlot.set(slot, []);
-      bySlot.get(slot).push({ id, src, score, p2, f1 });
+      const mine = e.slot === 'Weapon' ? [] : (this.gearPool.byType[e.slot] || []);
+      const dominated = mine.some((o) => Object.entries(e.st).every(([k, v]) => k === 'AttackInterval' || (this.items[o].eq.st[k] || 0) >= v) && this.items[o].eq.prot >= e.prot && this.items[o].eq.pow >= e.pow);
+      if (dominated) continue;
+      if (!byType.has(e.slot)) byType.set(e.slot, []);
+      byType.get(e.slot).push({ id, src });
     }
-    for (const [slot, list] of bySlot) {
-      for (const c of list.sort((a, b) => b.score - a.score).slice(0, 2)) {
-        const alt = Object.create(Engine.prototype);
-        Object.assign(alt, this);
-        alt.setPlayer(c.p2, { useMods: this.useMods });
-        const best = alt.ranked('chain', { skill: 'Combat' })[0];
-        const dGp = (best?.gph ?? 0) - base.gph;
-        if (dGp <= 0) continue;
-        out.push({ slot, id: c.id, it: this.items[c.id], cur: eqNow[slot]?.item || null, src: c.src, via: makeable.get(c.id) || null, price: this.buyPrice(c.id),
-          dGp, before: base, after: best, killBefore: f0.killMs, killAfter: c.f1.killMs, takenBefore: f0.takenPerKill, takenAfter: c.f1.takenPerKill });
+    const lv = combatLevels(this.p);
+    for (const [type, list] of byType) {
+      for (const c of list.sort((a, b) => statSum(b.id) - statSum(a.id)).slice(0, 4)) {
+        const pool2 = gearPool(this.g, this.p, (id) => id === c.id || (this.items[id].eq.r || []).every((q) => this.reqStatus(q).ok), [...this.extraGear, c.id],
+          (sp) => (sp.r || []).every((q) => this.reqStatus(q).ok));
+        let bestGain = null;
+        for (const x of top) {
+          const before = this.combatPlan(x.m.rid, 'money');
+          if (!before) continue;
+          const e = C.enemies[x.m.rid];
+          const loot = x.m.out.reduce((a, [it, q]) => a + q * this.value(it), 0) + x.m.gp;
+          const enemy = enemyFighter(e);
+          const score = (f, p) => (f.danger < 0.9 && f.killMs <= 20 * 60000 ? (HOUR / f.killMs) * (loot - this.inputCost(this.combatInputs(f, p))) : null);
+          const after = bestLoadout(this.g, pool2, lv, enemy, score, before.gear);
+          if (!after || !Object.values(after.gear).includes(c.id)) continue;
+          const gain = after.s - before.gph;
+          if (gain > 1 && (!bestGain || gain > bestGain.gain)) bestGain = { gain, x, before, after };
+        }
+        if (!bestGain) continue;
+        const slot = Object.entries(bestGain.after.gear).find(([, it]) => it === c.id)?.[0];
+        out.push({
+          slot, id: c.id, it: this.items[c.id], cur: bestGain.before.gear[slot] || null, src: c.src, via: makeable.get(c.id) || null, price: this.buyPrice(c.id),
+          dGp: bestGain.gain, enemy: bestGain.x.m, style: bestGain.after.style, styleBefore: bestGain.before.style,
+          killBefore: bestGain.before.f.killMs, killAfter: bestGain.after.f.killMs, takenBefore: bestGain.before.f.takenPerKill, takenAfter: bestGain.after.f.takenPerKill,
+        });
       }
     }
     out.sort((a, b) => b.dGp - a.dGp);
