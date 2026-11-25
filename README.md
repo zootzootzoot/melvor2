@@ -8,7 +8,7 @@ Everything runs in the browser. Your save is decoded locally and never uploaded.
 
 ## Features
 
-- **Plan (your route).** A speedrun-style, step-by-step plan from your save. Each step (quest, upgrade, gear, or a method to unlock) is chosen by how quickly it pays back the time it costs. What it depends on is resolved one layer down: training to the levels it needs, saving up the gold, the earlier quests in a chain, and recipes behind guild ranks. Training for one step counts toward the next, and a chart shows your gold per hour over play time. You can also pick a **goal** (a quest, a skill level, or a method to unlock) and get the full dependency-resolved route to it, including upgrades worth buying on the way because they save more time than they cost.
+- **Plan (your route).** A speedrun-style, step-by-step plan from your save. Each step (quest, upgrade, gear, or a method to unlock) is chosen by how quickly it pays back the time it costs. What it depends on is resolved one layer down: training to the levels it needs, saving up the gold, the earlier quests in a chain, and recipes behind guild ranks. Training for one step counts toward the next, and a chart shows your gold per hour over play time. You can also pick a **goal** (a quest, a skill level, a method or dungeon to unlock) and get the full dependency-resolved route to it, including upgrades worth buying on the way because they save more time than they cost.
 - **Quests.** The quest line from your save with every remaining task: progress per goal, the fastest way to do it at your rates, the training it needs first, items to hand in (what you have, how to make the rest), rewards, and the shop upgrades and combat areas each quest unlocks. Quest requirements are read from the save.
 - **Money makers.** Every method ranked by gold per hour. Open any row for the full per-hour ledger, the production chain and which of your upgrades affect it. There are five views:
   - **Best overall** (default). For each method, whichever pays more: from scratch, or from what's already in your bank.
@@ -78,7 +78,7 @@ Only shop purchases registered in the Shop entity config count as buyable. Some 
     - `<Skill>/Experience`: `double xp`.
     - `<Skill>/Toolbelt`: equipped tools.
     - `<Skill>/MasteryGuild`: `bool hasCategory [string]`, `int32 n`, then per task `string id` plus a region. The region holds `bool hasGoal [string goalId, region{double progress, bool complete, bool active}]` and `bool triggerMet`.
-    - `*/Statistics`: simple values (`string id`, region `double`), then item and currency tables (`string stat`, region `int32 n × (double value, string item)`).
+    - `*/Statistics`: simple values (`string id`, region `double`), then item and currency tables (`string stat`, region `int32 n × (double value, string item)`). Combat saves add enemy, dungeon, style, effect and prayer tables in the same shape (e.g. `CombatEnemyKilled` per enemy), which resolve kill-count unlocks.
 - Levels use the game's `StandardExperienceTable(0.25, 300, 2^(1/7))`, capped at 99.
 
 ## How the numbers are computed

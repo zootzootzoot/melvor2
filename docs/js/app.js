@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611250020';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250020';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250020';
+import { decodeSave } from './save.js?v=202611250025';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250025';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250025';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -432,7 +432,7 @@ function reachBanner() {
   return `<button class="reach panel" data-tskill-go="${esc(n?.skill || x.m.s)}" data-target-go="${n?.level || x.m.lv}">
     <span class="reach-k">${svg.spark} Within reach</span>
     ${img(methodIcon(x.m), '', 30)}
-    <span><b>${esc(x.m.n)}</b> pays <b class="gold">${fmtGp(x.gph)}/hr</b>, <span class="green">+${fmtGp(x.gain)}</span> over your best today. Needs ${x.needs.map((k) => `${esc(k.skill)} ${k.level}`).join(' + ')}, about <b>${fmtDuration(x.hours)}</b> of training.</span>
+    <span><b>${esc(x.m.n)}</b> pays <b class="gold">${fmtGp(x.gph)}/hr</b>, <span class="green">+${fmtGp(x.gain)}</span> over your best today. Needs ${[...x.needs.map((k) => `${esc(k.skill)} ${k.level}`), ...(x.kills || []).map((k) => `${fmtNum(k.left)} ${esc(k.name)} kills`)].join(' + ')}, about <b>${fmtDuration(x.hours)}</b>${x.kills?.length && !x.needs.length ? '' : ' of training'}.</span>
     <span class="reach-go">Plan it ${svg.arrow}</span>
   </button>`;
 }
@@ -886,7 +886,7 @@ function guildBadge(sk) {
 const KIND = {
   unlock: { label: 'Unlock', cls: 'k-unlock' }, shop: { label: 'Upgrade', cls: 'k-shop' },
   gear: { label: 'Gear', cls: 'k-gear' }, quest: { label: 'Quest', cls: 'k-quest' },
-  train: { label: 'Train', cls: 'k-unlock' }, guild: { label: 'Guild', cls: 'k-quest' },
+  train: { label: 'Train', cls: 'k-unlock' }, guild: { label: 'Guild', cls: 'k-quest' }, kill: { label: 'Kill', cls: 'k-gear' },
 };
 
 function goalPicker() {
@@ -894,16 +894,16 @@ function goalPicker() {
   const g = state.goal || { type: 'gold' };
   const quests = e.questList().filter((q) => !q.done);
   const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k)), ...COMBAT_SKILLS];
-  const locked = e.methods.filter((m) => !m.quest && m.k === 'active' && !e.status(m).unlocked && m.s !== 'Combat')
+  const locked = e.methods.filter((m) => !m.quest && m.k === 'active' && !e.status(m).unlocked && (m.s !== 'Combat' || m.id.startsWith('Dungeon:')))
     .sort((a, b) => a.s.localeCompare(b.s) || a.lv - b.lv);
   const bySkill = new Map();
-  for (const m of locked) { if (!bySkill.has(m.s)) bySkill.set(m.s, []); bySkill.get(m.s).push(m); }
+  for (const m of locked) { const k = m.s === 'Combat' ? 'Dungeons' : m.s; if (!bySkill.has(k)) bySkill.set(k, []); bySkill.get(k).push(m); }
   return `<div class="goal-pick panel">
     <span class="muted">Goal</span>
     <div class="seg">${[['gold', 'Earn more gold'], ['quest', 'A quest'], ['level', 'A level'], ['unlock', 'An unlock']].map(([k, l]) => `<button data-goaltype="${k}" aria-pressed="${g.type === k}">${l}</button>`).join('')}</div>
     ${g.type === 'quest' ? `<select id="goal-quest">${quests.map((q) => `<option value="${esc(q.id)}" ${g.id === q.id ? 'selected' : ''}>${esc(q.Q.n)} (${esc(q.Q.cat)})</option>`).join('')}</select>` : ''}
     ${g.type === 'level' ? `<select id="goal-skill">${skills.map((k) => `<option ${g.skill === k ? 'selected' : ''}>${k}</option>`).join('')}</select><label class="lvl-in"><input type="number" id="goal-level" min="2" max="99" value="${g.level || Math.min(99, e.level(g.skill || skills[0]) + 10)}"/></label>` : ''}
-    ${g.type === 'unlock' ? `<select id="goal-unlock">${[...bySkill.entries()].map(([sk, ms]) => `<optgroup label="${esc(sk)}">${ms.map((m) => `<option value="${esc(m.id)}" ${g.id === m.id ? 'selected' : ''}>${esc(m.n)} (lvl ${m.lv})</option>`).join('')}</optgroup>`).join('')}</select>` : ''}
+    ${g.type === 'unlock' ? `<select id="goal-unlock">${[...bySkill.entries()].map(([sk, ms]) => `<optgroup label="${esc(sk)}">${ms.map((m) => `<option value="${esc(m.id)}" ${g.id === m.id ? 'selected' : ''}>${esc(m.n)}${m.s === 'Combat' ? '' : ` (lvl ${m.lv})`}</option>`).join('')}</optgroup>`).join('')}</select>` : ''}
   </div>`;
 }
 
@@ -913,8 +913,8 @@ function goalView() {
   const r = e.goalRoute(g);
   const step = (st, i) => {
     const k = KIND[st.kind] || KIND.unlock;
-    const icon = st.kind === 'train' || st.kind === 'guild' ? skillIcon(st.skill) : st.kind === 'quest' ? G().skills.Quests?.i : st.kind === 'unlock' ? methodIcon(st.m) : G().shop[st.id.slice(2)]?.i;
-    const target = st.kind === 'train' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${st.level}"` : st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'guild' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${e.level(st.skill) + 1}"` : st.kind === 'shop' ? 'data-gotab="upgrades"' : `data-item="${esc(st.m?.primary || '')}"`;
+    const icon = st.kind === 'train' || st.kind === 'guild' ? skillIcon(st.skill) : st.kind === 'quest' ? G().skills.Quests?.i : st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'kill' ? G().combat.enemies[st.enemy]?.i : G().shop[st.id.slice(2)]?.i;
+    const target = st.kind === 'kill' ? 'data-gotab="money"' : st.kind === 'train' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${st.level}"` : st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'guild' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${e.level(st.skill) + 1}"` : st.kind === 'shop' ? 'data-gotab="upgrades"' : `data-item="${esc(st.m?.primary || '')}"`;
     return `<li class="ps ${k.cls}"><span class="ps-n num">${i + 1}</span>
       <div class="ps-card panel" role="button" tabindex="0" ${target}>
         <span class="ps-ico">${img(icon, '', 30)}</span>
@@ -988,6 +988,7 @@ function viewPlan() {
     const pre = [];
     for (const t of st.trainSteps || []) pre.push(`<button class="pre linkish-plain" data-tskill-go="${esc(t.skill)}" data-target-go="${t.level}">${img(skillIcon(t.skill), '', 14)}Train ${esc(t.skill)} to ${t.level}<span class="muted"> · ${fmtDuration(t.hours)}</span></button>`);
     if (st.guild) pre.push(`<button class="pre linkish-plain" data-tskill-go="${esc(st.guild.skill)}" data-target-go="${(E().level(st.guild.skill) || 1) + 1}">${img(skillIcon(st.guild.skill), '', 14)}Reach ${esc(st.guild.name)} (guild tasks)<span class="muted"> · ${fmtDuration(st.guild.hours)}</span></button>`);
+    for (const k of st.kills || []) pre.push(`<span class="pre">${img(G().combat.enemies[k.enemy]?.i, '', 14)}Kill ${fmtNum(k.left)} ${esc(k.name)}<span class="muted"> · ${fmtDuration(k.hours)}${k.style ? ' ' + esc(k.style.toLowerCase()) : ''}</span></span>`);
     if (st.earn > 0.005) pre.push(`<span class="pre">${img(G().currencies.GoldPieces, '', 14)}Save up ${fmtGp(st.gp)} gold<span class="muted"> · ${fmtDuration(st.earn)} of ${esc(plan.steps[i - 1]?.bestName || plan.startName)}</span></span>`);
     if (st.items?.length) pre.push(...st.items.filter(([it, q]) => (e.bank[it] || 0) < q).map(([it, q]) => `<span class="pre" data-item="${esc(it)}">${img(itemIcon(it), '', 14)}Get ${fmtNum(q - (e.bank[it] || 0))} ${esc(e.name(it))}</span>`));
     const icon = st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'quest' ? G().skills.Quests?.i || G().skills.CompletionLog?.i : st.kind === 'gear' ? itemIcon(st.id.slice(2)) : G().shop[st.id.slice(2)]?.i;
@@ -1294,11 +1295,11 @@ function viewUnlocks() {
       <div class="bu-top">${img(methodIcon(x.m), '', 40)}<div><b>${esc(x.m.n)}</b><span class="muted">${img(skillIcon(x.m.s), '', 14)}${x.m.s}${x.m.loc ? ` · ${esc(x.m.loc)}` : ''}</span></div></div>
       <div class="bu-v"><span class="num gold">${fmtGp(x.gph)}</span><small>gp/hr from scratch</small></div>
       <div class="bu-gain"><b class="green num">+${fmtGp(x.gain)}</b> over your best today (${esc(better.best?.m.n || '')}, ${fmtGp(better.nowBest)}/hr)</div>
-      <div class="bu-need">${svg.target} ${x.needs.map((n) => `${esc(n.skill)} ${n.level} <span class="muted">(${n.gap} level${n.gap === 1 ? '' : 's'})</span>`).join(' + ')}<span class="bu-h">${svg.clock} ~${fmtDuration(x.hours)} of training</span></div>
+      <div class="bu-need">${svg.target} ${[...x.needs.map((n) => `${esc(n.skill)} ${n.level} <span class="muted">(${n.gap} level${n.gap === 1 ? '' : 's'})</span>`), ...(x.kills || []).map((k) => `kill ${fmtNum(k.left)} ${esc(k.name)}`)].join(' + ')}<span class="bu-h">${svg.clock} ~${fmtDuration(x.hours)} of training</span></div>
     </button>`;
   const row = (x) => `<button class="bu-row" ${goBtn(x)}>
       ${img(methodIcon(x.m), '', 30)}
-      <span class="title"><b>${esc(x.m.n)}</b><span class="sub">${x.needs.map((n) => `${esc(n.skill)} ${n.level}`).join(' + ')}<span class="sep">·</span>~${fmtDuration(x.hours)}</span></span>
+      <span class="title"><b>${esc(x.m.n)}</b><span class="sub">${[...x.needs.map((n) => `${esc(n.skill)} ${n.level}`), ...(x.kills || []).map((k) => `kill ${fmtNum(k.left)} ${esc(k.name)}`)].join(' + ')}<span class="sep">·</span>~${fmtDuration(x.hours)}</span></span>
       <span class="num muted">${fmtGp(x.skillBest?.gph ?? 0)} →</span>
       <span class="num gold">${fmtGp(x.gph)}<small> gp/hr</small></span>
     </button>`;

@@ -2,7 +2,7 @@
 // Save string = Base64( Brotli( SaveWriter stream ) ). The game flushes the Brotli
 // stream without closing it, so the stream is "truncated" by design: we decode
 // with a streaming decoder and accept NeedsMoreInput at the end.
-import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611250020';
+import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611250025';
 
 let brotliReady = null;
 /** For Node tests: initialise the decoder from wasm bytes instead of fetching it. */
@@ -198,7 +198,8 @@ function readStatistics(bytes, comp, into) {
     if (len >= 8) into.simple[id] = r.f64();
     r.p = e;
   }
-  for (const kind of ['items', 'currencies']) {
+  // base tables, then (Combat) enemies, dungeons, combat styles, effects and prayers, all (double value, string id)
+  for (const kind of ['items', 'currencies', 'enemies', 'dungeons', 'styles', 'effects', 'prayers']) {
     if (r.p >= end) break;
     const m = r.i32();
     for (let i = 0; i < m; i++) {
@@ -264,7 +265,7 @@ export async function decodeSave(input) {
   }
   const guild = {};
   const pets = {};
-  const stats = { simple: {}, items: {}, currencies: {} };
+  const stats = { simple: {}, items: {}, currencies: {}, enemies: {}, dungeons: {}, styles: {}, effects: {}, prayers: {} };
   for (const [id, comps] of Object.entries(ents)) {
     if (comps.MasteryGuild) { try { guild[id] = readGuild(raw, comps.MasteryGuild); } catch { /* tolerate */ } }
     if (comps.Pets) {
@@ -331,6 +332,9 @@ export async function decodeSave(input) {
       }
     } catch { /* tolerate */ }
   }
+  // one lookup across every statistics table: stats.all[statistic][id] = value
+  stats.all = {};
+  for (const kind of ['items', 'currencies', 'enemies', 'dungeons', 'styles', 'effects', 'prayers']) for (const [k, v] of Object.entries(stats[kind])) stats.all[k] = { ...(stats.all[k] || {}), ...v };
   const components = Object.fromEntries(Object.entries(ents).map(([k, v]) => [k, Object.keys(v)]));
   return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, quests, slayer, entities: Object.keys(ents), components };
 }

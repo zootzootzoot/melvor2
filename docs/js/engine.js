@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250020';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250025';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -230,7 +230,7 @@ export class Engine {
         else if (t[1] === 'g') st = done.has(id);
         else if (t[1] === 't') st = trig.has(id);
         else if (t[1] === 'l') st = (this.levels[t[2]] ?? 1) >= t[3];
-        else if (t[1] === 'i') st = (p.stats?.items?.[t[2]]?.[t[3]] ?? 0) >= t[4];
+        else if (t[1] === 'i') st = (p.stats?.all?.[t[2]]?.[t[3]] ?? p.stats?.items?.[t[2]]?.[t[3]] ?? 0) >= t[4];
         else if (t[1] === 'v') st = (p.stats?.simple?.[t[2]] ?? 0) >= t[3];
         else if (t[1] === 'p') st = !!p.pets?.[t[2]];
         if (st) { lo += pts; hi += pts; } else if (st === null) hi += pts;
@@ -596,6 +596,14 @@ export class Engine {
         if (gs.hi < need) return { ok: false, known: true, text, kind: 'rank', pts: need - gs.lo, skill: r.s };
         // Can't tell: some of the tasks that would get you there aren't readable from the save.
         return { ok: true, known: false, text: `${text} (probably)`, kind: 'rank', pts: need - gs.lo, skill: r.s };
+      }
+      case 'stat': {
+        const have = this.p.allGuild ? r.n : this.p.stats?.all?.[r.stat]?.[r.key];
+        if (have == null && !this.p.stats) return { ok: true, known: false, text: r.text, kind: 'stat' };
+        const h = have || 0;
+        const en = r.stat === 'CombatEnemyKilled' && this.g.combat?.enemies?.[r.key]?.n;
+        const label = en ? `Kill ${r.n} ${en}` : r.text;
+        return { ok: h >= r.n, known: true, text: h >= r.n ? label : `${label} (${Math.floor(h)}/${r.n})`, kind: 'stat', stat: r.stat, key: r.key, n: r.n, have: h };
       }
       default: return { ok: true, known: false, text: r.text, kind: 'other' };
     }
@@ -1116,7 +1124,16 @@ export class Engine {
       if (st.unlocked || st.levelGap > maxGap) continue;
       // locked only by levels, or by levels plus the next mastery guild rank (reachable via guild tasks)
       const rankMiss = st.missing.filter((x) => x.kind === 'rank');
-      if (st.missing.some((x) => x.kind !== 'lvl' && x.kind !== 'rank')) continue;
+      if (st.missing.some((x) => x.kind !== 'lvl' && x.kind !== 'rank' && !(x.kind === 'stat' && x.stat === 'CombatEnemyKilled'))) continue;
+      // kill-count requirements (dungeons): the kills you still need, fought with your best loadout
+      const kills = [];
+      for (const x of st.missing) {
+        if (x.kind !== 'stat') continue;
+        const plan = this.combatPlan(x.key, 'money');
+        const left = x.n - (x.have || 0);
+        kills.push({ enemy: x.key, name: this.g.combat.enemies[x.key]?.n || x.key, left, hours: plan ? left * plan.f.killMs / HOUR : Infinity, style: plan?.style });
+      }
+      if (kills.some((k) => !Number.isFinite(k.hours))) continue;
       let guild = null;
       if (rankMiss.length) {
         const r0 = m.r.find((q) => q.t === 'rank');
@@ -1145,13 +1162,14 @@ export class Engine {
       const need = new Map();
       for (const x of st.missing) if (x.kind === 'lvl') need.set(x.skill, Math.max(need.get(x.skill) || 0, x.need));
       const needs = [...need.entries()].map(([skill, level]) => ({ skill, level, gap: level - this.level(skill) }));
-      const hours = needs.reduce((a, n) => a + timeTo(n.skill, n.level), 0) + (guild?.hours || 0);
-      out.push({ m, gph, r, needs, hours, guild, gap: st.levelGap, beatsAll: gph > nowBest, gain: gph - nowBest, skillGain: gph - sb, skillBest: skillBest.get(m.s) });
+      const killHours = kills.reduce((a, k) => a + k.hours, 0);
+      const hours = needs.reduce((a, n) => a + timeTo(n.skill, n.level), 0) + (guild?.hours || 0) + killHours;
+      out.push({ m, gph, r, needs, hours, guild, kills, killHours, gap: st.levelGap, beatsAll: gph > nowBest, gain: gph - nowBest, skillGain: gph - sb, skillBest: skillBest.get(m.s) });
     }
     // keep the best option per (skill, unlock level), then order by how soon it pays off
     const seen = new Map();
     for (const x of out.sort((a, b) => b.gph - a.gph)) {
-      const k = x.needs.map((n) => n.skill + n.level).join('|');
+      const k = x.needs.map((n) => n.skill + n.level).join('|') + x.kills.map((q) => '|k' + q.enemy).join('');
       if (!seen.has(k)) seen.set(k, x);
     }
     const list = [...seen.values()].sort((a, b) => (b.beatsAll - a.beatsAll) || a.hours - b.hours);
@@ -1621,7 +1639,7 @@ export class Engine {
 
     // 1) better methods behind levels
     for (const x of this.betterUnlocks().list) {
-      cands.push({ kind: 'unlock', id: 'u:' + x.m.id, m: x.m, title: `Unlock ${x.m.n}`, needs: x.needs, actionHours: x.guild?.hours || 0, guild: x.guild, gp: 0, newRate: x.gph,
+      cands.push({ kind: 'unlock', id: 'u:' + x.m.id, m: x.m, title: `Unlock ${x.m.n}`, needs: x.needs, actionHours: (x.guild?.hours || 0) + x.killHours, guild: x.guild, kills: x.kills, gp: 0, newRate: x.gph,
         why: `${x.m.s}${x.m.loc ? ' · ' + x.m.loc : ''}: ${Math.round(x.gph).toLocaleString('en-US')} gp/hr from scratch` });
     }
     // 2) shop upgrades (with their level requirements)
@@ -1768,6 +1786,15 @@ export class Engine {
           if (r.t === 'quest') doQuest(r.id);
           else if (r.t === 'lvl') train(r.s, r.l, `needed for ${m.n}`);
         }
+        for (const r of m.r) {
+          if (r.t !== 'stat' || r.stat !== 'CombatEnemyKilled') continue;
+          const st = this.reqStatus(r);
+          if (st.ok) continue;
+          const plan = this.combatPlan(r.key, 'money');
+          const left = r.n - (st.have || 0);
+          steps.push({ kind: 'kill', id: 'k:' + r.key, title: `Kill ${left} ${this.g.combat.enemies[r.key]?.n || r.key}`, skill: 'Combat', enemy: r.key,
+            hours: plan ? left * plan.f.killMs / HOUR : Infinity, why: plan ? `${plan.style} · needed for ${m.n}` : 'not safe with your gear yet' });
+        }
         const rank = m.r.find((r) => r.t === 'rank');
         if (rank && !this.reqStatus(rank).ok) {
           const gs = this.guild?.[rank.s];
@@ -1787,7 +1814,8 @@ export class Engine {
         }
         const lvAt = { ...lvNow };
         const val = this.ranked('chain').find((x) => x.m.id === m.id)?.gph ?? this.sellRate(m, lvAt).gpPerHour;
-        steps.push({ kind: 'unlock', id: 'u:' + m.id, m, title: `Start ${m.n}`, hours: 0, why: `${m.s}: about ${Math.round(val || 0).toLocaleString('en-US')} gp/hr once unlocked (inputs at sell value)` });
+        const why = m.s === 'Combat' ? (val ? `about ${Math.round(val).toLocaleString('en-US')} gp/hr once unlocked` : 'not safe or too slow with your current gear') : `${m.s}: about ${Math.round(val || 0).toLocaleString('en-US')} gp/hr once unlocked (inputs at sell value)`;
+        steps.push({ kind: 'unlock', id: 'u:' + m.id, m, title: `Start ${m.n}`, hours: 0, why });
       }
     }
     let t = 0;

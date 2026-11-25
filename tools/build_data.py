@@ -101,6 +101,10 @@ def reqs_of(*lists):
                 out.append({"t": "tool", "item": short(dd["Item"])})
             elif t == "QuestComplete":
                 out.append({"t": "quest", "id": short(dd["Quest"])})
+            elif t in ("EnemyStatistic", "SlayerMasterStatistic"):
+                key = short(dd.get("Enemy") or dd.get("Master"))
+                label = (f"Kill {dd.get('Value')} " if t == "EnemyStatistic" else f"{dd.get('Value')} slayer tasks for ") + re.sub(r"([a-z])([A-Z])", r"\1 \2", key or "")
+                out.append({"t": "stat", "stat": short(dd.get("Statistic")), "key": key, "n": dd.get("Value", 1), "text": label})
             elif t == "MasteryGuildRank":
                 out.append({"t": "rank", "s": short(dd["Component"]["Entity"]), "id": short(dd["Rank"])})
             else:
@@ -111,7 +115,7 @@ def reqs_of(*lists):
                     "ItemStatistic": f"Brew {dd.get('Value')} " + short(dd.get("Item", "")),
                     "DungeonStatistic": f"Clear {short(dd.get('Dungeon',''))} x{dd.get('Value')}",
                     "SlayerMasterStatistic": f"{dd.get('Value')} tasks for {short(dd.get('Master',''))}",
-                    "EnemyStatistic": f"Kill {dd.get('Value')} " + re.sub(r"([a-z])([A-Z])", r" ", short(dd.get('Enemy', ''))),
+                    "EnemyStatistic": f"Kill {dd.get('Value')} " + re.sub(r"([a-z])([A-Z])", r"\1 \2", short(dd.get('Enemy', ''))),
                     "QuestStepActive": "During quest " + short(dd.get('Quest', '')),
                     "AgilityTechniqueLevel": "Agility technique level " + str(dd.get('Level', '')),
                 }.get(t, t)
@@ -505,7 +509,7 @@ def main():
         td = tr.get("Data") or {}
         pets[pt["Id"]] = {"n": pt["DisplayName"], "i": icon(pt.get("Icon")), "b": bonuses_of(pt.get("Bonuses")),
                           "skill": short((td.get("Component") or {}).get("Entity")), "scale": td.get("ScaleFactor") if short(tr.get("Type")) == "ChancePerExperience" else None,
-                          "how": re.sub(r"([a-z])([A-Z])", r" ", short(tr.get("Type")) or short((pt.get("Goal") or {}).get("Type")) or "")}
+                          "how": re.sub(r"([a-z])([A-Z])", r"\1 \2", short(tr.get("Type")) or short((pt.get("Goal") or {}).get("Type")) or "")}
 
     # ---- combat: styles, stances, weapon types, enemies, areas
     def lvl_ratios(lst):
