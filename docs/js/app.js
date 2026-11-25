@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611250007';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250007';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250007';
+import { decodeSave } from './save.js?v=202611250020';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250020';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250020';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -416,7 +416,7 @@ function viewMoney() {
     </div>
   </div>
   ${!state.explorer && (state.mode === 'best' || state.mode === 'chain') && !state.skill && !state.q ? reachBanner() : ''}
-  ${state.skill === 'Combat' ? fighterBanner() : ''}
+  ${state.skill === 'Combat' ? fighterBanner() + slayerPanel() : ''}
   ${top ? topPick(top) : ''}
   <div class="list" id="list">
     ${rows.length ? rows.slice(0, state.limit).map((x, i) => methodRow(x, i, max)).join('') : emptyMoney()}
@@ -609,6 +609,7 @@ function details(x) {
       ${compare}
       ${x.bank && !compare ? `<div class="fact wide"><div class="k">Your bank</div><div class="v">Runs for <b class="gold">${fmtDuration(x.bank.hours)}</b>, ${fmtGp(x.bank.total, { sign: true })} profit total. Limited by ${x.bank.limiting.map((it) => esc(e.name(it))).join(', ')}.</div></div>` : ''}
       ${m.x?.t === 'fight' ? fightFacts(x, r) : ''}
+      ${m.x?.t === 'dungeon' ? dungeonFacts(r) : ''}
       ${m.x?.t === 'thv' ? `<div class="fact wide"><div class="k">Heads up</div><div class="v" style="font-weight:400">A failed attempt stuns you for ${fmtMs(ex.stun || 2000)} and hits for up to ${m.dmg} HP, so bring food. ${ex.stages > 1 ? `Takes ${ex.stages} stages to finish.` : ''}</div></div>` : ''}
       ${upgradesFact(m, r)}
       ${split}
@@ -651,6 +652,36 @@ function fightFacts(x, r) {
     <span><small>Enemy max hit</small><b class="num ${danger}">${fmtNum(f.enemyMax)}</b><small>${fmtPct(f.danger, 0)} of your HP</small></span>
     <span><small>Damage taken</small><b class="num">${fmtNum(f.takenPerKill * r.aph)}/hr</b>${foodHr > 0 ? `<small>~${fmtNum(foodHr, 1)} ${esc(e.name(r.extra.food))}/hr</small>` : ''}</span>
   </div>${G().combat.enemies[x.m.rid]?.special ? '<div class="muted" style="font-size:12px;margin-top:6px">This enemy has special attacks or passives that are not modelled, so expect more damage taken than shown.</div>' : ''}</div>`;
+}
+
+function dungeonFacts(r) {
+  const d = r.extra?.dungeon;
+  if (!d) return '';
+  const C = G().combat;
+  return `<div class="fact wide"><div class="k">The run · ${fmtMs(d.runMs)} · loot only at the end</div><div class="waves">${d.waves.map((w) => {
+    const en = C.enemies[w.eid];
+    return `<div class="wave">${img(en?.i, '', 26)}<span><b>${w.n > 1 ? `${fmtNum(w.n, 1)} × ` : ''}${esc(en?.n || w.eid)}</b><small>${esc(w.plan.style)} · ${fmtMs(w.plan.f.aliveMs)} each · enemy max hit ${fmtPct(w.plan.f.danger, 0)} of HP</small></span></div>`;
+  }).join('')}</div><div class="muted" style="font-size:12px;margin-top:6px">Each enemy uses its best loadout from your gear. Switching gear between waves is up to you.</div></div>`;
+}
+
+function slayerPanel() {
+  const e = E();
+  const opts = e.slayerOptions();
+  if (!opts.length || state.explorer) return '';
+  const C = G().combat;
+  const tasks = opts.filter((o) => o.task);
+  return `<div class="panel slayer">
+    <div class="sl-h">${img(skillIcon('Slayer'), '', 22)}<b>Slayer</b><span class="muted">level ${e.level('Slayer')} · task kills pay coins and Slayer XP on top of normal loot</span></div>
+    ${tasks.map((o) => {
+      const en = C.enemies[o.task.enemy];
+      const row = o.enemies.find((x) => x.eid === o.task.enemy);
+      const left = Math.max(0, o.task.length - o.task.progress);
+      return `<div class="sl-task">${img(en?.i, '', 30)}<span><small>Current task · ${esc(o.sm.n)}</small><b>${esc(en?.n || o.task.enemy)} · ${o.task.progress}/${o.task.length}</b></span><span class="num">${row?.ok ? `~${fmtDuration(left / row.kph)} left` : '<span class="red">not safe with your gear: reroll</span>'}</span></div>`;
+    }).join('')}
+    <div class="sl-grid">${opts.map((o) => `<div class="sl-m ${o.ok ? '' : 'locked'}">${img(o.sm.i, '', 28)}<span><b>${esc(o.sm.n)}</b><small>${o.ok ? `${o.viable}/${o.total} enemies farmable` : esc(o.reqs.filter((r) => !r.ok).map((r) => r.text).join(', '))}</small></span>
+      <span class="sl-v"><b class="num">${o.coinsHr > 0 ? fmtGp(o.coinsHr) : '—'}</b><small>coins/hr</small></span><span class="sl-v"><b class="num">${o.xph > 0 ? fmtGp(o.xph) : '—'}</b><small>xp/hr</small></span><span class="sl-v"><b class="num ${o.gph < 0 ? 'red' : 'gold'}">${o.viable ? fmtGp(o.gph) : '—'}</b><small>gp/hr</small></span></div>`).join('')}</div>
+    <p class="muted" style="font-size:12px;margin:0">Coins per task kill are ⌊0.1 × enemy HP^1.15⌋ and Slayer XP is HP/8 + 4. Enemies you can't farm safely are counted as rerolls. Gold/hr is the normal loot, after food.</p>
+  </div>`;
 }
 
 function fighterBanner() {
@@ -696,7 +727,7 @@ function chainTree(chain) {
 // ---------------------------------------------------------------- training
 function viewTrain() {
   const e = E(), g = G(), s = state.save;
-  const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k)), ...(state.explorer ? [] : COMBAT_SKILLS)];
+  const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k)), ...(state.explorer ? [] : [...COMBAT_SKILLS, 'Slayer'])];
   if (!skills.includes(state.trainSkill)) {
     // default: the skill closest to its next level by time
     state.trainSkill = skills.map((k) => ({ k, o: e.trainOptions(k)[0] })).filter((x) => x.o).sort((a, b) => {
@@ -775,7 +806,7 @@ function viewTrain() {
           const need = atLevel < 99 ? xpForLevel(atLevel + 1) - (atLevel === cur.level ? cur.xp : xpForLevel(atLevel)) : 0;
           return `<div class="trow ${i === 0 ? 'top' : ''}" data-item="${esc(o.m.primary || '')}">
             <span class="ico">${img(methodIcon(o.m), '', 28)}</span>
-            <span class="title"><b>${esc(o.m.n)} ${o.src === 'bank' ? `<span class="tag green">from bank · ${fmtDuration(o.bankHours)}</span>` : o.src === 'scratch' ? '<span class="tag">makes inputs</span>' : ''}</b><span class="sub">${o.stance ? `${esc(o.loadout?.style || '')} · ${esc(G().combat.stances[o.stance]?.n || o.stance)}${o.loadout?.gear.Weapon ? ` · ${esc(G().items[o.loadout.gear.Weapon]?.n || '')}` : ''}${o.loadout?.spell ? ` · ${esc(G().combat.spells[o.loadout.spell].n)}` : ''}<span class="sep">·</span>${fmtMs(o.killMs)} per kill<span class="sep">·</span>${esc(o.m.loc || '')}` : `lvl ${o.m.lv}`}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.src === 'scratch' && o.scratch.steps.length ? `<span class="sep">·</span>${o.scratch.steps.slice(0, 3).map((st) => `${img(methodIcon(st.m), '', 14)}${Math.round(st.share * 60)}m`).join(' ')}` : o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
+            <span class="title"><b>${esc(o.m.n)} ${o.src === 'bank' ? `<span class="tag green">from bank · ${fmtDuration(o.bankHours)}</span>` : o.src === 'scratch' ? '<span class="tag">makes inputs</span>' : ''}</b><span class="sub">${o.slayer ? `${o.slayer.viable}/${o.slayer.total} task enemies you can farm<span class="sep">·</span>${fmtGp(o.slayer.coinsHr)} coins/hr<span class="sep">·</span>~${fmtDuration(o.slayer.perTaskHours)} per task` : o.stance ? `${esc(o.loadout?.style || '')} · ${esc(G().combat.stances[o.stance]?.n || o.stance)}${o.loadout?.gear.Weapon ? ` · ${esc(G().items[o.loadout.gear.Weapon]?.n || '')}` : ''}${o.loadout?.spell ? ` · ${esc(G().combat.spells[o.loadout.spell].n)}` : ''}<span class="sep">·</span>${fmtMs(o.killMs)} per kill<span class="sep">·</span>${esc(o.m.loc || '')}` : `lvl ${o.m.lv}`}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.src === 'scratch' && o.scratch.steps.length ? `<span class="sep">·</span>${o.scratch.steps.slice(0, 3).map((st) => `${img(methodIcon(st.m), '', 14)}${Math.round(st.share * 60)}m`).join(' ')}` : o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
             <span class="r num xpv" title="${esc(o.m.in.length ? `With inputs on hand: ${fmtGp(o.direct.xph)} xp/hr · making them yourself: ${o.scratch.feasible ? fmtGp(o.scratch.xph) : 'not possible yet'} xp/hr` : 'Gathering: no inputs needed')}">${fmtGp(o.xph)}</span>
             <span class="r num ${o.gph < 0 ? 'red' : 'green'}">${fmtGp(o.gph, { sign: true })}</span>
             <span class="r num muted">${atLevel < 99 ? fmtDuration(need / o.xph) : '—'}</span>

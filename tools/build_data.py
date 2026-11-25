@@ -111,6 +111,9 @@ def reqs_of(*lists):
                     "ItemStatistic": f"Brew {dd.get('Value')} " + short(dd.get("Item", "")),
                     "DungeonStatistic": f"Clear {short(dd.get('Dungeon',''))} x{dd.get('Value')}",
                     "SlayerMasterStatistic": f"{dd.get('Value')} tasks for {short(dd.get('Master',''))}",
+                    "EnemyStatistic": f"Kill {dd.get('Value')} " + re.sub(r"([a-z])([A-Z])", r" ", short(dd.get('Enemy', ''))),
+                    "QuestStepActive": "During quest " + short(dd.get('Quest', '')),
+                    "AgilityTechniqueLevel": "Agility technique level " + str(dd.get('Level', '')),
                 }.get(t, t)
                 out.append({"t": "other", "k": t, "text": label})
     return out
@@ -231,6 +234,10 @@ def main():
         if it.get("IgnoreCompletion"):
             items[it["Id"]]["ic"] = 1
         caps = it.get("Capabilities") or {}
+        op = caps.get(NS + "Openable")
+        if op:
+            items[it["Id"]]["open"] = {"fixed": [[short(x["Item"]), x.get("MinQuantity", x.get("Quantity", 1)), x.get("MaxQuantity", x.get("Quantity", 1))] for x in op.get("AlwaysDrops") or []],
+                                       "table": table(op.get("DropTable"))}
         eq = caps.get(NS + "Equipment")
         if eq:
             st = eq.get("Stats") or {}
@@ -552,6 +559,18 @@ def main():
     combat["elements"] = {}
     for t in O.get("ElementalBonus", []):
         combat["elements"][short(t["PlayerElement"]) + "|" + short(t["EnemyElement"])] = sum(b["Value"] for b in t["Bonuses"]["Component"] if b["Stat"]["Name"] == "PercentMaxHit")
+    combat["dungeons"] = {}
+    for dg in O.get("Dungeon", []):
+        combat["dungeons"][dg["Id"]] = {
+            "n": dg["DisplayName"], "i": icon(dg.get("CoverBackground")) if False else None, "diff": short(dg.get("Difficulty")),
+            "waves": [[[[short(x["Enemy"]), x.get("Weight", 1)] for x in w.get("Enemies") or []], w.get("Count", 1)] for w in dg.get("Enemies") or []],
+            "rewards": drops_of(dg.get("Rewards")), "r": reqs_of(dg.get("UnlockRequirements")), "dark": dg.get("Darkness", 0),
+        }
+    combat["slayer"] = {}
+    for sm in O.get("SlayerMaster", []):
+        combat["slayer"][sm["Id"]] = {"n": sm["DisplayName"], "i": icon(sm.get("Icon")), "areas": [short(a) for a in sm.get("Areas") or []],
+                                      "len": sm.get("BaseTaskLength", 15), "reroll": (sm.get("RerollCost") or {}).get("Quantity", 0),
+                                      "r": reqs_of(sm.get("UnlockRequirements"))}
     area_cats = {c["Id"]: c.get("DisplayName") for c in O.get("CombatAreaCategory", [])}
     for ar in O["CombatArea"]:
         combat["areas"][ar["Id"]] = {"n": ar["DisplayName"], "cat": area_cats.get(short(ar.get("Category")), short(ar.get("Category"))),
@@ -577,7 +596,7 @@ def main():
         im.save(dst, "WEBP", lossless=True, method=6)
         written += 1
     have = set(os.listdir(os.path.join(OUT, "icons")))
-    for coll in (items.values(), methods, shop.values(), skills.values(), shop_cats.values(), pets.values(), combat["enemies"].values(), combat["styles"].values()):
+    for coll in (items.values(), methods, shop.values(), skills.values(), shop_cats.values(), pets.values(), combat["enemies"].values(), combat["styles"].values(), combat["slayer"].values()):
         for x in coll:
             if x.get("i") and x["i"] not in have:
                 x["i"] = None

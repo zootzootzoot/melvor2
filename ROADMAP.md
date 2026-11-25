@@ -3,6 +3,7 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Slayer (current task, coins/XP/gold per master, Slayer training) and dungeons (wave-by-wave runs, end rewards, chests valued at contents)
 - Goals on the Plan tab: route to a quest, level or unlock with resolved prerequisites and time-saving upgrade detours
 - Collection tracker (Bank) and pace across imports (Plan)
 - Plan tab: speedrun-style route that picks the fastest-paying next step and resolves its training, gold and quest prerequisites; income chart over play time
@@ -25,7 +26,7 @@ What players would pay for, ordered by value versus effort. Done items stay list
 - Guild task planner: every task with live progress, time estimates, and the fastest set of tasks to the next rank (in Training)
 
 ## Up next, in order
-1. **Combat, part 2.** Slayer tasks and coins, dungeons, magic spells and special attacks.
+1. **Combat, part 3.** Enemy special attacks and passives, prayers, kill-count unlocks read from the save.
 2. **More bonus sources.** Agility obstacles and astrology nodes.
 3. **Farming planner.** Per-plot profit per growth cycle with compost, the best crop for each plot type, and a timer-aware schedule.
 4. **Item & recipe browser.** Filterable database of every item and recipe with values, sources and uses.

@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250007';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250020';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -133,10 +133,30 @@ export class Engine {
         });
       }
     }
+    // dungeons: a fixed run of waves; enemies inside drop nothing, the reward comes at the end
+    for (const [did, d] of Object.entries(C.dungeons || {})) {
+      const rw = dropsPerKill({ drops: d.rewards });
+      const boss = d.waves[d.waves.length - 1]?.[0]?.[0]?.[0];
+      out.push({
+        id: 'Dungeon:' + did, s: 'Combat', n: d.n, i: C.enemies[boss]?.i, k: 'active', ms: 60000, xp: 0, in: [], out: rw.items, gp: rw.gp,
+        lv: Math.max(1, ...d.r.filter((q) => q.t === 'lvl').map((q) => q.l)), r: d.r, cat: 'Dungeon', rid: did, loc: 'Dungeon', locId: did,
+        note: 'Dungeon', x: { t: 'dungeon', id: did },
+      });
+    }
     return out;
   }
 
-  value(item) { return this.items[item]?.v ?? 0; }
+  value(item) {
+    const it = this.items[item];
+    if (!it) return 0;
+    if (it.open && it._ov === undefined) {
+      const v = (x) => this.items[x]?.v ?? 0;
+      const tot = it.open.table.reduce((a, r) => a + r[1], 0) || 1;
+      it._ov = it.open.fixed.reduce((a, [x, lo, hi]) => a + v(x) * (lo + hi) / 2, 0)
+        + it.open.table.reduce((a, [x, w, lo, hi]) => a + (w / tot) * v(x) * (lo + hi) / 2, 0);
+    }
+    return Math.max(it.v ?? 0, it._ov ?? 0);
+  }
   name(item) { return this.items[item]?.n ?? item; }
 
   // ---------------------------------------------------------------- player
@@ -768,6 +788,30 @@ export class Engine {
       ins = this.combatInputs(f, plan.p);
       extra = { fight: f, food: this.food, loadout: plan };
       void e;
+    } else if (x.t === 'dungeon') {
+      const C = this.g.combat;
+      const d = C.dungeons[x.id];
+      let t = 0, xpSum = 0;
+      const insMap = new Map();
+      const waves = [];
+      for (const [pool, count] of d.waves) {
+        const tot = pool.reduce((a, [, w]) => a + w, 0) || 1;
+        for (const [eid, w] of pool) {
+          const plan = this.combatPlan(eid, 'money');
+          if (!plan) return { m, succ: 1, ms: 1e12, aph: 0, outs: [], ins: [], gp: 0, xp: 0, outValue: 0, extra: {}, blocked: `${C.enemies[eid]?.n || eid} is too dangerous or slow for your gear` };
+          const n = count * (w / tot);
+          t += n * (plan.f.aliveMs + SPAWN_MS);
+          xpSum += n * plan.f.xp.reduce((a, [, v]) => a + v, 0);
+          for (const [it, q] of this.combatInputs(plan.f, plan.p)) insMap.set(it, (insMap.get(it) || 0) + q * n);
+          waves.push({ eid, n, plan });
+        }
+      }
+      ms = t;
+      for (const [it, q] of m.out) add(it, q);
+      gp = m.gp;
+      xp = xpSum;
+      ins = [...insMap.entries()];
+      extra = { dungeon: { waves, runMs: t }, food: this.food };
     } else if (x.t === 'fm') {
       ms = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
       const pres = clamp01(M('PreservationChance'));
@@ -1198,6 +1242,16 @@ export class Engine {
     const key = 'train|' + skill + '|' + level;
     if (this._cache.has(key)) return this._cache.get(key);
     if (COMBAT_SKILLS.includes(skill)) { const rows = this.combatTrainOptions(skill, level); this._cache.set(key, rows); return rows; }
+    if (skill === 'Slayer') {
+      const rows = this.slayerOptions(level).filter((o) => o.ok && o.viable > 0).map((o) => ({
+        m: { id: 'Slayer:' + o.id, s: 'Slayer', n: o.sm.n, i: o.sm.i, lv: 1, in: [], out: [], r: o.sm.r, primary: null },
+        xph: o.xph, gph: o.gph, r: { succ: 1, ins: [], outs: [], extra: {} }, direct: { xph: o.xph, gph: o.gph },
+        scratch: { feasible: true, xph: o.xph, gph: o.gph, steps: [], made: [], xpBy: [['Slayer', o.xph]], share: 1 },
+        bankHours: Infinity, src: 'gather', slayer: o,
+      })).sort((a, b) => b.xph - a.xph);
+      this._cache.set(key, rows);
+      return rows;
+    }
     const lv = { ...this.levels, [skill]: level };
     const rows = [];
     for (const m of this.methods) {
@@ -1217,6 +1271,51 @@ export class Engine {
     rows.sort((a, b) => b.xph - a.xph);
     this._cache.set(key, rows);
     return rows;
+  }
+
+  /**
+   * Slayer per master: tasks are random enemies from the master's areas; a task kill pays
+   * floor(0.1 x HP^1.15) slayer coins and HP/8 + 4 Slayer XP. Enemies you can't farm safely are
+   * rerolled (costing coins). Rates are averaged over the tasks you'd actually do.
+   */
+  slayerOptions(level = this.level('Slayer')) {
+    const key = 'slayer|' + level;
+    if (this._cache.has(key)) return this._cache.get(key);
+    const C = this.g.combat;
+    const out = [];
+    const lv = { ...this.levels, Slayer: level };
+    for (const [id, sm] of Object.entries(C?.slayer || {})) {
+      const reqs = sm.r.map((r) => this.reqStatus(r, lv));
+      const ok = reqs.every((r) => r.ok);
+      const enemies = [...new Set(sm.areas.flatMap((a) => C.areas[a]?.enemies || []))];
+      const avgLen = (sm.len + (sm.len + 3 * level)) / 2;
+      let coins = 0, xp = 0, hours = 0, gold = 0, viable = 0;
+      const rows = [];
+      for (const eid of enemies) {
+        const plan = this.combatPlan(eid, 'money');
+        const hp = (C.enemies[eid]?.lv.Hitpoints ?? 1) * 10;
+        if (!plan) { rows.push({ eid, ok: false }); continue; }
+        viable++;
+        const kph = HOUR / plan.f.killMs;
+        const h = avgLen / kph;
+        hours += h;
+        coins += avgLen * Math.max(1, Math.floor(0.1 * Math.pow(hp, 1.15)));
+        xp += avgLen * (hp / 8 + 4);
+        gold += plan.gph * h;
+        rows.push({ eid, ok: true, kph, plan });
+      }
+      const pBlocked = enemies.length ? 1 - viable / enemies.length : 1;
+      const rerollPerTask = viable ? (pBlocked / (1 - pBlocked)) * sm.reroll : 0;
+      const tasks = viable ? hours / (hours / viable) : 0;
+      void tasks;
+      const perTaskHours = viable ? hours / viable : Infinity;
+      const coinsHr = viable ? (coins - rerollPerTask * viable) / hours : 0;
+      out.push({ id, sm, ok, reqs, enemies: rows, viable, total: enemies.length, coinsHr, xph: viable ? xp / hours : 0, gph: viable ? gold / hours : 0, perTaskHours, rerollPerTask,
+        task: this.p.slayer?.[id] || null });
+    }
+    out.sort((a, b) => (b.ok - a.ok) || b.xph - a.xph);
+    this._cache.set(key, out);
+    return out;
   }
 
   /** Enemies ranked by XP/hr for one combat skill: best style, loadout and stance that give that XP. */
@@ -1255,7 +1354,7 @@ export class Engine {
       const opts = this.trainOptions(skill, level);
       const nextUnlock = this.methods.filter((m) => m.s === skill && m.lv > level).reduce((a, m) => Math.min(a, m.lv), 100);
       // combat rates improve with every level, so re-plan every few levels
-      const stopLevel = Math.min(target, COMBAT_SKILLS.includes(skill) ? level + 3 : nextUnlock);
+      const stopLevel = Math.min(target, COMBAT_SKILLS.includes(skill) || skill === 'Slayer' ? level + 3 : nextUnlock);
       const stopXp = Math.min(goal, xpForLevel(stopLevel));
       const need = Math.max(0, stopXp - xp);
       // time to earn `need` xp with each option: bank stock first, then from scratch
@@ -1288,7 +1387,7 @@ export class Engine {
       }
       const last = segs[segs.length - 1];
       const seg = { m: o.m, fromLevel: level, toLevel: stopLevel, hours: pick.t, xp: need, xph: need / pick.t, gph: pick.g / pick.t, bankHours: pick.hb, scratchHours: pick.hs, steps: o.scratch.steps, otherXp: o.scratch.xpBy.filter(([s]) => s !== skill) };
-      if (last && last.m === o.m) {
+      if (last && last.m.id === o.m.id) {
         last.hours += pick.t; last.toLevel = stopLevel; last.xp += need; last.bankHours += pick.hb; last.scratchHours += pick.hs;
         last.xph = last.xp / last.hours; last.gph = (last.gph * (last.hours - pick.t) + pick.g) / last.hours;
       } else segs.push(seg);
