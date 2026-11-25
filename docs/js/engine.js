@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250006';
+import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250007';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -1603,6 +1603,97 @@ export class Engine {
       for (const o of cands) if (o.kind === 'unlock' && o.newRate <= best) used.add(o.id);
     }
     const res = { steps, startRate: start?.gph ?? 0, startName: start?.m.n ?? '—', endRate: best, time };
+    this._cache.set(key, res);
+    return res;
+  }
+
+  /**
+   * Route to one goal: { type: 'quest', id } | { type: 'level', skill, level } | { type: 'unlock', id }.
+   * Resolves everything it depends on in order (earlier quests, training with levels carried
+   * forward, guild ranks, gold), and adds upgrades on the way when they save more time than they cost.
+   */
+  goalRoute(goal) {
+    const key = 'goal|' + JSON.stringify(goal);
+    if (this._cache.has(key)) return this._cache.get(key);
+    const steps = [];
+    const lvNow = { ...this.levels };
+    const best = this.ranked('chain')[0]?.gph || 0;
+    let gold = this.p.wallet?.GoldPieces ?? this.p.header?.gp ?? 0;
+    const hCache = new Map();
+    const H = (sk, lvl) => {
+      if (lvl <= (this.levels[sk] ?? 1) || NOT_TRAINABLE.has(sk)) return 0;
+      const k = sk + lvl;
+      if (!hCache.has(k)) hCache.set(k, this.planLevel(sk, lvl).hours);
+      return hCache.get(k);
+    };
+    const train = (sk, lvl, why) => {
+      if ((lvNow[sk] ?? 1) >= lvl) return;
+      let hours = Math.max(0, H(sk, lvl) - H(sk, lvNow[sk] ?? 1));
+      // detours: upgrades for this skill that save more training time than they cost
+      for (const a of this.upgradeAdvice()) {
+        if (a.skill !== sk || !(a.dXp > 0) || a.gap || steps.some((s) => s.id === 's:' + a.id)) continue;
+        const saved = hours * (1 - 1 / (1 + a.dXp));
+        const cost = Math.max(0, a.gpCost - gold) / Math.max(best, 1);
+        if (saved > Math.max(cost * 1.25, 5 / 60)) {
+          steps.push({ kind: 'shop', id: 's:' + a.id, title: `Buy ${a.s.n}`, hours: cost, why: `+${(a.dXp * 100).toFixed(1)}% ${sk} XP saves ~${fmtDuration(saved)} of training`, earn: cost, gp: a.gpCost });
+          gold = Math.max(0, gold - a.gpCost);
+          hours -= saved;
+        }
+      }
+      steps.push({ kind: 'train', id: 't:' + sk + lvl, skill: sk, level: lvl, from: lvNow[sk] ?? 1, title: `Train ${sk} to ${lvl}`, hours, why });
+      lvNow[sk] = lvl;
+    };
+    const doQuest = (qid, seen = new Set()) => {
+      if (seen.has(qid)) return;
+      seen.add(qid);
+      const q = this.questInfo(qid);
+      if (!q || q.done) return;
+      for (const r of q.Q.r) {
+        if (r.t === 'quest') doQuest(r.id, seen);
+        else if (r.t === 'lvl') train(r.s, r.l, `needed to start ${q.Q.n}`);
+      }
+      for (const t of q.training || []) train(t.skill, t.level, `for ${q.Q.n}`);
+      const action = Math.max(0, q.hours - (q.training || []).reduce((a, t) => a + t.hours, 0));
+      steps.push({ kind: 'quest', id: 'q:' + qid, q, title: `Quest: ${q.Q.n}`, hours: action, unknown: q.unknown,
+        why: [q.rewardValue > 0 ? `rewards worth ${Math.round(q.rewardValue).toLocaleString('en-US')} gold` : '', q.unlocks.filter((u) => u[0] === 'shop' || u[0] === 'area').map((u) => 'unlocks ' + u[2]).join(', ')].filter(Boolean).join(' · ') });
+      gold += q.rewardValue;
+    };
+    let title = '';
+    if (goal.type === 'quest') { title = this.g.quests[goal.id]?.n || goal.id; doQuest(goal.id); }
+    else if (goal.type === 'level') { title = `${goal.skill} ${goal.level}`; train(goal.skill, goal.level, 'your goal'); }
+    else if (goal.type === 'unlock') {
+      const m = this.byId.get(goal.id);
+      title = m?.n || goal.id;
+      if (m) {
+        for (const r of m.r) {
+          if (r.t === 'quest') doQuest(r.id);
+          else if (r.t === 'lvl') train(r.s, r.l, `needed for ${m.n}`);
+        }
+        const rank = m.r.find((r) => r.t === 'rank');
+        if (rank && !this.reqStatus(rank).ok) {
+          const gs = this.guild?.[rank.s];
+          const next = gs?.next === rank.id;
+          const gp = next ? this.guildPlan(rank.s) : null;
+          steps.push({ kind: 'guild', id: 'r:' + rank.id, title: `Reach ${this.guildName(rank.s, rank.id)}`, skill: rank.s, hours: gp?.reachable ? gp.hours : Infinity,
+            why: next ? 'mastery guild tasks (see Training)' : `several guild ranks away (${gs ? Math.max(0, gs.need(rank.id) - gs.lo) : '?'} more guild points); work through guild tasks in Training` });
+        }
+        for (const r of m.r) {
+          if (r.t === 'shop' && !this.reqStatus(r).ok) {
+            const sp = this.g.shop[r.id];
+            const cost = (sp?.cost.find(([c]) => c === 'GoldPieces')?.[1]) || 0;
+            const earn = Math.max(0, cost - gold) / Math.max(best, 1);
+            steps.push({ kind: 'shop', id: 's:' + r.id, title: `Buy ${sp?.n || r.id}`, hours: earn, earn, gp: cost, why: `required for ${m.n}` });
+            gold = Math.max(0, gold - cost);
+          }
+        }
+        const lvAt = { ...lvNow };
+        const val = this.ranked('chain').find((x) => x.m.id === m.id)?.gph ?? this.sellRate(m, lvAt).gpPerHour;
+        steps.push({ kind: 'unlock', id: 'u:' + m.id, m, title: `Start ${m.n}`, hours: 0, why: `${m.s}: about ${Math.round(val || 0).toLocaleString('en-US')} gp/hr once unlocked (inputs at sell value)` });
+      }
+    }
+    let t = 0;
+    for (const s of steps) { t += Number.isFinite(s.hours) ? s.hours : 0; s.time = t; }
+    const res = { title, steps, hours: steps.reduce((a, s) => a + s.hours, 0), unknown: steps.some((s) => s.unknown || !Number.isFinite(s.hours)) };
     this._cache.set(key, res);
     return res;
   }

@@ -950,3 +950,9 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 .pace-row { display: grid; grid-template-columns: 20px 1fr auto auto; gap: 10px; align-items: center; padding: 7px 12px; border-radius: 10px; background: rgba(22, 25, 35, .6); border: 1px solid var(--line); font-size: 13px; }
 .pace-row img { width: 20px; height: 20px; }
 .pace-row .muted { font-size: 12px; }
+
+.goal-pick { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 14px; margin: 18px 0 4px; }
+.goal-pick > .muted { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; }
+.goal-pick select { padding: 7px 12px; border-radius: 999px; border: 1px solid var(--line-strong); background: #12141c; color: var(--text); max-width: 340px; }
+.goal-hero { grid-template-columns: auto auto auto; justify-content: start; }
+.goal-hero .ph-k b { font-size: 28px; }

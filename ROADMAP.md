@@ -3,6 +3,7 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Goals on the Plan tab: route to a quest, level or unlock with resolved prerequisites and time-saving upgrade detours
 - Collection tracker (Bank) and pace across imports (Plan)
 - Plan tab: speedrun-style route that picks the fastest-paying next step and resolves its training, gold and quest prerequisites; income chart over play time
 - Quests: parsed from the save (goal progress), quest requirements resolved, quest-only actions and bosses estimated, hand-in items costed, unlocks valued
@@ -27,7 +28,6 @@ What players would pay for, ordered by value versus effort. Done items stay list
 1. **Combat, part 2.** Slayer tasks and coins, dungeons, magic spells and special attacks.
 2. **More bonus sources.** Agility obstacles and astrology nodes.
 3. **Farming planner.** Per-plot profit per growth cycle with compost, the best crop for each plot type, and a timer-aware schedule.
-5. **Goals.** Pin goals ("Smithing 60", "buy Steel Anvil", "100k gold") and get one combined plan with time estimates, re-checked on every import.
-7. **Item & recipe browser.** Filterable database of every item and recipe with values, sources and uses.
-8. **Multiple characters.** Switch between saved characters and compare them.
-9. **Shareable cards.** An image card of your profile and best methods for Discord.
+4. **Item & recipe browser.** Filterable database of every item and recipe with values, sources and uses.
+5. **Multiple characters.** Switch between saved characters and compare them.
+6. **Shareable cards.** An image card of your profile and best methods for Discord.

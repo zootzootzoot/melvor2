@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611250006';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250006';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250006';
+import { decodeSave } from './save.js?v=202611250007';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250007';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250007';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -26,9 +26,9 @@ const state = {
   tab: 'money', mode: 'best', skill: '', q: '', passive: false, limit: 30, open: new Set(),
   bankView: 'process', bankSort: 'value', bankQ: '', bankSortTotal: true,
   mods: true, trainSkill: '', trainTarget: null, trainPrefer: 'xp', trainLevel: null,
-  upSort: 'payback', upFilter: 'all', history: null, window: 8, horizon: 96,
+  upSort: 'payback', upFilter: 'all', history: null, window: 8, horizon: 96, goal: null,
 };
-const PREF_FIELDS = ['horizon', 'window', 'mode', 'passive', 'bankSort', 'tab', 'mods', 'trainSkill', 'trainPrefer', 'upSort', 'bankView', 'bankSortTotal'];
+const PREF_FIELDS = ['goal', 'horizon', 'window', 'mode', 'passive', 'bankSort', 'tab', 'mods', 'trainSkill', 'trainPrefer', 'upSort', 'bankView', 'bankSortTotal'];
 Object.assign(state, (() => {
   try {
     const p = JSON.parse(localStorage.getItem(PREF_KEY)) || {};
@@ -855,7 +855,49 @@ function guildBadge(sk) {
 const KIND = {
   unlock: { label: 'Unlock', cls: 'k-unlock' }, shop: { label: 'Upgrade', cls: 'k-shop' },
   gear: { label: 'Gear', cls: 'k-gear' }, quest: { label: 'Quest', cls: 'k-quest' },
+  train: { label: 'Train', cls: 'k-unlock' }, guild: { label: 'Guild', cls: 'k-quest' },
 };
+
+function goalPicker() {
+  const e = E();
+  const g = state.goal || { type: 'gold' };
+  const quests = e.questList().filter((q) => !q.done);
+  const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k)), ...COMBAT_SKILLS];
+  const locked = e.methods.filter((m) => !m.quest && m.k === 'active' && !e.status(m).unlocked && m.s !== 'Combat')
+    .sort((a, b) => a.s.localeCompare(b.s) || a.lv - b.lv);
+  const bySkill = new Map();
+  for (const m of locked) { if (!bySkill.has(m.s)) bySkill.set(m.s, []); bySkill.get(m.s).push(m); }
+  return `<div class="goal-pick panel">
+    <span class="muted">Goal</span>
+    <div class="seg">${[['gold', 'Earn more gold'], ['quest', 'A quest'], ['level', 'A level'], ['unlock', 'An unlock']].map(([k, l]) => `<button data-goaltype="${k}" aria-pressed="${g.type === k}">${l}</button>`).join('')}</div>
+    ${g.type === 'quest' ? `<select id="goal-quest">${quests.map((q) => `<option value="${esc(q.id)}" ${g.id === q.id ? 'selected' : ''}>${esc(q.Q.n)} (${esc(q.Q.cat)})</option>`).join('')}</select>` : ''}
+    ${g.type === 'level' ? `<select id="goal-skill">${skills.map((k) => `<option ${g.skill === k ? 'selected' : ''}>${k}</option>`).join('')}</select><label class="lvl-in"><input type="number" id="goal-level" min="2" max="99" value="${g.level || Math.min(99, e.level(g.skill || skills[0]) + 10)}"/></label>` : ''}
+    ${g.type === 'unlock' ? `<select id="goal-unlock">${[...bySkill.entries()].map(([sk, ms]) => `<optgroup label="${esc(sk)}">${ms.map((m) => `<option value="${esc(m.id)}" ${g.id === m.id ? 'selected' : ''}>${esc(m.n)} (lvl ${m.lv})</option>`).join('')}</optgroup>`).join('')}</select>` : ''}
+  </div>`;
+}
+
+function goalView() {
+  const e = E();
+  const g = state.goal;
+  const r = e.goalRoute(g);
+  const step = (st, i) => {
+    const k = KIND[st.kind] || KIND.unlock;
+    const icon = st.kind === 'train' || st.kind === 'guild' ? skillIcon(st.skill) : st.kind === 'quest' ? G().skills.Quests?.i : st.kind === 'unlock' ? methodIcon(st.m) : G().shop[st.id.slice(2)]?.i;
+    const target = st.kind === 'train' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${st.level}"` : st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'guild' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${e.level(st.skill) + 1}"` : st.kind === 'shop' ? 'data-gotab="upgrades"' : `data-item="${esc(st.m?.primary || '')}"`;
+    return `<li class="ps ${k.cls}"><span class="ps-n num">${i + 1}</span>
+      <div class="ps-card panel" role="button" tabindex="0" ${target}>
+        <span class="ps-ico">${img(icon, '', 30)}</span>
+        <span class="ps-main"><span class="ps-kind">${k.label}</span><b>${esc(st.title)}${st.kind === 'train' ? ` <span class="muted" style="font-weight:500">from ${st.from}</span>` : ''}</b><span class="ps-why">${esc(st.why || '')}${st.unknown ? ' · some parts not modelled' : ''}</span>${st.earn > 0.005 ? `<span class="ps-pre"><span class="pre">${img(G().currencies.GoldPieces, '', 14)}Save up ${fmtGp(st.gp)} gold<span class="muted"> · ${fmtDuration(st.earn)}</span></span></span>` : ''}</span>
+        <span class="ps-side"><b class="num">${Number.isFinite(st.hours) ? fmtDuration(st.hours) : '—'}</b><small class="num">at ${fmtDuration(st.time)}</small></span>
+      </div></li>`;
+  };
+  return `<div class="panel plan-hero goal-hero">
+      <div class="ph-k"><small>Goal</small><b>${esc(r.title)}</b></div>
+      <div class="ph-arrow">${svg.clock}</div>
+      <div class="ph-k"><small>Total play time</small><b class="num gold">${Number.isFinite(r.hours) ? fmtDuration(r.hours) : '—'}${r.unknown ? '+' : ''}</b><span class="muted">${r.steps.length} steps</span></div>
+    </div>
+    ${r.steps.length ? `<ol class="psteps stagger">${r.steps.map(step).join('')}</ol>` : `<div class="empty"><b>Already done.</b>Pick another goal.</div>`}`;
+}
 
 function rateChart(plan) {
   const pts = [[0, plan.startRate]];
@@ -928,7 +970,13 @@ function viewPlan() {
       </div>
     </li>`;
   };
+  const goalMode = state.goal && state.goal.type !== 'gold';
+  if (goalMode) {
+    return `<div class="section-head"><div><h2>Your route</h2><p>Everything your goal depends on, in order: earlier quests, the training each step needs (levels carry forward), guild ranks and gold. Upgrades are added on the way when they save more time than they cost.</p></div></div>
+    ${goalPicker()}${goalView()}${paceSection()}`;
+  }
   return `
+  ${goalPicker()}
   <div class="section-head"><div><h2>Your route</h2><p>A step-by-step plan from where your save is now. Each step is picked by how quickly it pays back the time it costs. The training, gold and earlier quests it depends on are worked out for you, and training done for one step counts toward the next. Rates are from scratch, so they're sustainable.</p></div>
     <div class="seg" role="group" aria-label="Horizon">${[[24, '1 day'], [96, '4 days'], [336, '2 weeks']].map(([h, l]) => `<button data-horizon="${h}" aria-pressed="${state.horizon === h}">${l}</button>`).join('')}</div></div>
   <div class="panel plan-hero">
@@ -1382,7 +1430,7 @@ function openPalette() {
 function bindView(v) {
   v.onclick = (ev) => {
     const itemEl = ev.target.closest('[data-item]');
-    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go]');
+    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-goaltype],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go]');
     // Item icons open the item drawer, even inside a clickable row.
     if (itemEl?.dataset.item && (!t || (t !== itemEl && t.contains(itemEl)))) { ev.stopPropagation(); openItem(itemEl.dataset.item); return; }
     if (!t) return;
@@ -1406,6 +1454,17 @@ function bindView(v) {
     }
     if (t.dataset.mode) { state.mode = t.dataset.mode; state.limit = 30; state.open.clear(); savePrefs(); return rerender(); }
     if (t.dataset.skill !== undefined) { state.skill = t.dataset.skill; state.limit = 30; return rerender(); }
+    if (t.dataset.goaltype) {
+      const ty = t.dataset.goaltype;
+      const e = E();
+      if (ty === 'gold') state.goal = null;
+      else if (ty === 'quest') state.goal = { type: 'quest', id: e.questList().find((q) => !q.done && q.available)?.id || e.questList().find((q) => !q.done)?.id };
+      else if (ty === 'level') { const sk = state.trainSkill && !NOT_TRAINABLE.has(state.trainSkill) ? state.trainSkill : 'Fishing'; state.goal = { type: 'level', skill: sk, level: Math.min(99, e.level(sk) + 10) }; }
+      else state.goal = { type: 'unlock', id: e.betterUnlocks().list[0]?.m.id || e.methods.find((m) => !m.quest && !e.status(m).unlocked)?.id };
+      if (state.goal && !state.goal.id && ty !== 'level') state.goal = null;
+      savePrefs();
+      return rerender();
+    }
     if (t.dataset.horizon) { state.horizon = Number(t.dataset.horizon); savePrefs(); return rerender(); }
     if (t.dataset.questGo) { state.openQuest = t.dataset.questGo; return go('quests'); }
     if (t.dataset.quest) { state.openQuest = state.openQuest === t.dataset.quest ? null : t.dataset.quest; return rerender(); }
@@ -1430,6 +1489,12 @@ function bindView(v) {
   if (passive) passive.onchange = () => { state.passive = passive.checked; savePrefs(); rerender(); };
   const mods = $('#mods', v);
   if (mods) mods.onchange = () => { state.mods = mods.checked; savePrefs(); applyPlayer(); const y = scrollY; renderDashboard(); scrollTo({ top: y }); toast(state.mods ? 'Rates include your upgrades' : 'Showing base rates, without upgrades'); };
+  const gq = $('#goal-quest', v); if (gq) gq.onchange = () => { state.goal = { type: 'quest', id: gq.value }; savePrefs(); rerender(); };
+  const gu = $('#goal-unlock', v); if (gu) gu.onchange = () => { state.goal = { type: 'unlock', id: gu.value }; savePrefs(); rerender(); };
+  const gs = $('#goal-skill', v), gl = $('#goal-level', v);
+  const setLvl = () => { const lvl = Math.max(2, Math.min(99, Math.round(Number(gl.value)) || 2)); state.goal = { type: 'level', skill: gs.value, level: lvl }; savePrefs(); rerender(); };
+  if (gs) gs.onchange = () => { gl.value = Math.min(99, E().level(gs.value) + 10); setLvl(); };
+  if (gl) gl.onchange = setLvl;
   const target = $('#target', v);
   if (target) target.onchange = () => { const n = Math.round(Number(target.value)); if (n >= 2 && n <= 99) { state.trainTarget = n; rerender(); } };
   const atl = $('#atlevel', v);
