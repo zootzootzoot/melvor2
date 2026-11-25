@@ -18,6 +18,7 @@ Everything runs in the browser. Your save is decoded locally and never uploaded.
   - **Value added.** The best crafts, with inputs priced at their sell value.
 - **Slayer & dungeons.** Dungeons are ranked as money makers: each wave is fought with its best loadout, and the loot comes only at the end (chests are valued at their contents). Slayer shows your current task from the save, and each master's coins, XP and gold per hour over the tasks you can safely do. Slayer is also trainable in the Training tab.
 - **Training.** For each skill: the fastest route to a target level, switching methods as better ones unlock. Shows total time, the gold it makes or costs, and the supplies it needs against what you have. Also lists every way to train the skill at any level. A **guild task planner** shows every mastery guild task with live progress from your save, how long each takes at your rates, and the fastest set of tasks to the next rank.
+- **Astrology.** Your constellations from the save: knowledge, picks waiting to be spent, time to the next pick, and every node you could pick next ranked by what it adds to your best gold/hr or XP/hr in the skill it boosts (identical nodes are grouped). Astrology is trainable in the Training tab, its best picks appear in Upgrades, and the Plan adds a node pick as a step when it lifts your best rate.
 - **Upgrades.** Every shop upgrade you can buy next, priced against what it earns. Each card shows the gain in gold/hr and XP/hr on your best method for that skill, the payback time, whether you can afford it now, and how long your best method takes to earn the rest. Also lists every upgrade you own and what it does, **combat gear worth getting** (pieces you can craft or buy, each tested in the best loadout against your top combat targets and shown for the enemy it helps), and **potions worth drinking**.
 - **Bank.** *Process first* shows what to turn each stack into before selling, and how much extra that earns. *Safe to sell* lists stacks nothing you can do (now or within 15 levels) uses, so you can free bank slots. *Everything* shows your bank's value, with sorting and search.
 - **Next unlocks.** The most lucrative methods you're a few levels away from, with the XP and estimated time to get there.
@@ -78,6 +79,7 @@ Only shop purchases registered in the Shop entity config count as buyable. Some 
     - `<Skill>/Experience`: `double xp`.
     - `<Skill>/Toolbelt`: equipped tools.
     - `<Skill>/MasteryGuild`: `bool hasCategory [string]`, `int32 n`, then per task `string id` plus a region. The region holds `bool hasGoal [string goalId, region{double progress, bool complete, bool active}]` and `bool triggerMet`.
+    - `Astrology/Action`: action timer, then per constellation `string id` + region `{double knowledge, int32 n × string minorNode, int32 m × string majorNode}`. Each knowledge threshold gives one minor pick; every 4 minor nodes give one major pick.
     - `*/Statistics`: simple values (`string id`, region `double`), then item and currency tables (`string stat`, region `int32 n × (double value, string item)`). Combat saves add enemy, dungeon, style, effect and prayer tables in the same shape (e.g. `CombatEnemyKilled` per enemy), which resolve kill-count unlocks.
 - Levels use the game's `StandardExperienceTable(0.25, 300, 2^(1/7))`, capped at 99.
 
@@ -87,9 +89,11 @@ Rates use the game's own stat computers and action handlers, with your bonuses a
 
 - owned shop upgrades;
 - equipped toolbelt items;
-- mastery guild rank rewards.
+- mastery guild rank rewards;
+- found pets;
+- unlocked astrology nodes (minor and major), plus each constellation's per-node knowledge bonus.
 
-Each bonus applies where its context matches: skill, recipe, category, subcategory, product item or fishing location. Astrology and agility bonuses are not applied yet.
+Each bonus applies where its context matches: skill, recipe, category, subcategory, product item, fishing location or constellation. Astrology's combat-stat nodes are listed but not yet fed into the combat model. Agility in Melvor Idle 2 only boosts Agility itself (techniques), so it adds nothing to other skills.
 
 | Skill | Model |
 |---|---|

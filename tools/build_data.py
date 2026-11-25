@@ -127,7 +127,7 @@ def iq(lst, qty="Quantity"):
     return [[short(x["Item"]), x[qty]] for x in lst or []]
 
 
-CTX_KEYS = {"Recipe": "r", "Category": "cat", "Subcategory": "sub", "Item": "it", "Location": "loc", "Currency": "cur"}
+CTX_KEYS = {"Recipe": "r", "Category": "cat", "Subcategory": "sub", "Item": "it", "Location": "loc", "Currency": "cur", "Constellation": "r"}
 
 
 def bonuses_of(B):
@@ -511,6 +511,25 @@ def main():
                           "skill": short((td.get("Component") or {}).get("Entity")), "scale": td.get("ScaleFactor") if short(tr.get("Type")) == "ChancePerExperience" else None,
                           "how": re.sub(r"([a-z])([A-Z])", r"\1 \2", short(tr.get("Type")) or short((pt.get("Goal") or {}).get("Type")) or "")}
 
+    # ---- astrology: constellations (studied like recipes), their minor/major nodes and bonuses
+    astro = {"cons": [], "nodes": {}}
+    for c in O.get("AstrologyConstellation") or []:
+        cid = c["Id"]
+        sec = [{"t": "lvl", "s": short(r["Data"]["Component"]["Entity"]), "l": r["Data"]["Level"]} for r in c.get("SecondaryRequirements") or [] if short(r["Type"]) == "Level"]
+        r = reqs_of(c.get("Requirements")) + ([{"t": "any", "of": sec}] if sec else [])
+        lv = max([q["l"] for q in r if q.get("t") == "lvl" and q["s"] == "Astrology"] or [1])
+        astro["cons"].append({"id": cid, "n": c["DisplayName"], "i": icon(c.get("Icon")), "minor": [short(x) for x in c["MinorNodes"]], "major": [short(x) for x in c["MajorNodes"]],
+                              "thr": c["MinorNodeUnlockKnowledge"], "per": c.get("MinorNodesPerMajorNode") or 4, "pmb": bonuses_of(c.get("PerMinorNodeBonuses"))})
+        for kind in ("MinorNodes", "MajorNodes"):
+            for nid in c[kind]:
+                astro["nodes"][short(nid)] = {"c": cid}
+        methods.append({"id": "Astrology:" + cid, "s": "Astrology", "n": c["DisplayName"], "i": icon(c.get("Icon")), "k": "active", "ms": c["BaseInterval"], "xp": c["BaseExperience"],
+                        "in": [], "out": [], "gp": 0, "lv": lv, "r": r, "cat": "Constellations", "rid": cid, "x": {"t": "astro", "iv": c["BaseInterval"], "k": c.get("BaseKnowledge", 1)}})
+    for nd in O.get("AstrologyNode") or []:
+        if nd["Id"] not in astro["nodes"]:
+            continue
+        astro["nodes"][nd["Id"]].update({"n": nd["DisplayName"], "t": nd["NodeType"], "b": bonuses_of(nd.get("Bonuses")), "d": nd.get("Description"), "r": reqs_of(nd.get("UnlockRequirements"))})
+
     # ---- combat: styles, stances, weapon types, enemies, areas
     def lvl_ratios(lst):
         return [[short(x["Level"]), x["Ratio"]] for x in lst or []]
@@ -768,7 +787,7 @@ def main():
         "v": 1,
         "gameVersion": "Alpha 0.11.5.5 (save v31)",
         "items": items, "buy": buy, "shop": shop, "methods": methods, "skills": skills, "currencies": cur_icons,
-        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat, "quests": quests,
+        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat, "quests": quests, "astro": astro,
     }
     with open(os.path.join(OUT, "data", "game.json"), "w", encoding="utf-8") as f:
         json.dump(game, f, separators=(",", ":"), ensure_ascii=False)

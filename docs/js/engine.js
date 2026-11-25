@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250025';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250032';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -21,7 +21,7 @@ export const PASSIVE_SKILLS = new Set(['Farming', 'Ranching']);
 const STATS_TYPE = {
   Woodcutting: 'WoodcuttingAction', Mining: 'MiningAction', Fishing: 'FishingAction', Thieving: 'ThievingAction',
   Cooking: 'CookingAction', Herblore: 'HerbloreAction', Firemaking: 'FiremakingAction', Farming: 'FarmingAction',
-  Hunting: 'HuntingAction', Ranching: 'RanchingAction',
+  Hunting: 'HuntingAction', Ranching: 'RanchingAction', Astrology: 'AstrologyAction',
 };
 const statsTypeOf = (skill) => STATS_TYPE[skill] || 'ArtisanAction';
 const STAT_GROUPS = { PercentInterval: 'GlobalPercentActionInterval', FlatInterval: 'GlobalFlatActionInterval' };
@@ -160,7 +160,7 @@ export class Engine {
   name(item) { return this.items[item]?.n ?? item; }
 
   // ---------------------------------------------------------------- player
-  setPlayer(p, { extraShop = [], extraTools = [], extraGear = [], useMods = this.useMods, keepCombat = false } = {}) {
+  setPlayer(p, { extraShop = [], extraTools = [], extraGear = [], extraAstro = [], useMods = this.useMods, keepCombat = false } = {}) {
     this.p = p;
     this.useMods = useMods;
     this.levels = {};
@@ -200,6 +200,25 @@ export class Engine {
     }
     for (const [id, pet] of Object.entries(this.g.pets || {})) {
       if ((p.pets?.[id] || p.allGuild) && pet.b?.length) this.sources.push({ kind: 'pet', id, n: pet.n, i: pet.i, b: pet.b });
+    }
+    // astrology: unlocked minor/major nodes, plus each constellation's per-minor-node bonus
+    const astro = {};
+    for (const [cid, a] of Object.entries(p.astro || {})) astro[cid] = { ...a, minor: [...a.minor], major: [...a.major] };
+    for (const nid of extraAstro) {
+      const nd = this.g.astro?.nodes[nid];
+      if (!nd) continue;
+      const a = astro[nd.c] || (astro[nd.c] = { knowledge: 0, minor: [], major: [] });
+      (nd.t === 'Major' ? a.major : a.minor).push(nid);
+    }
+    this.astro = astro;
+    for (const c of this.g.astro?.cons || []) {
+      const a = astro[c.id];
+      if (!a) continue;
+      for (const nid of [...a.minor, ...a.major]) {
+        const nd = this.g.astro.nodes[nid];
+        if (nd?.b?.length) this.sources.push({ kind: 'astro', id: nid, n: `${c.n} ${nd.n}`, i: c.i, b: nd.b });
+      }
+      if (a.minor.length && c.pmb?.length) this.sources.push({ kind: 'astro', id: c.id + ':per', n: `${c.n} (${a.minor.length} nodes)`, i: c.i, b: c.pmb.map(([t, nm, v, ctx]) => [t, nm, v * a.minor.length, ctx]) });
     }
     this.bIndex = new Map();
     for (const src of this.sources) {
@@ -569,6 +588,13 @@ export class Engine {
 
   reqStatus(r, levelOverride) {
     switch (r.t) {
+      case 'any': {
+        const opts = r.of.map((q) => this.reqStatus(q, levelOverride));
+        const met = opts.find((o) => o.ok);
+        if (met) return met;
+        const best = opts.sort((a, b) => a.gap - b.gap)[0];
+        return { ...best, text: opts.map((o) => o.text).join(' or ') };
+      }
       case 'lvl': {
         const have = levelOverride?.[r.s] ?? this.level(r.s);
         return { ok: have >= r.l, known: true, text: `${r.s} ${r.l}`, gap: Math.max(0, r.l - have), kind: 'lvl', skill: r.s, need: r.l };
@@ -659,6 +685,9 @@ export class Engine {
       for (const [it, q, ch] of x.hit) add(it, clamp01((ch + M('FlatOnHitItemChance', it)) * (1 + M('PercentOnHitItemChance', it))) * (q + Math.trunc(M('FlatOnHitItemQuantity', it))) * (1 + d) * hits);
       for (const [it, q, ch] of x.cut) add(it, clamp01((ch + M('FlatOnCutItemChance', it)) * (1 + M('PercentOnCutItemChance', it))) * (q + Math.trunc(M('FlatOnCutItemQuantity', it))) * (1 + d));
       extra = { hits, iv, hp };
+    } else if (x.t === 'astro') {
+      ms = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
+      extra = { knowledge: x.k * (1 + M('PercentKnowledge')) };
     } else if (x.t === 'mine') {
       const iv = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
       const p = clamp01(x.pc * (1 + M('PercentIncreaseRockBreakChance')));
@@ -1021,7 +1050,7 @@ export class Engine {
     let rows = this._cache.get(key);
     if (!rows) {
       const unlockedAll = this.unlockedMethods();
-      const unlocked = unlockedAll.filter((m) => !m.quest);
+      const unlocked = unlockedAll.filter((m) => !m.quest && m.s !== 'Astrology');
       rows = [];
       if (mode === 'chain' || mode === 'best') {
         const { rates } = this.solveChains(unlockedAll);
@@ -1468,6 +1497,78 @@ export class Engine {
     return out;
   }
 
+  /** Clone with extra hypothetical astrology nodes. */
+  withAstro(nodes) {
+    const e = Object.create(Engine.prototype);
+    Object.assign(e, this);
+    e.setPlayer(this.p, { extraShop: [], extraAstro: nodes, useMods: true, keepCombat: true });
+    return e;
+  }
+
+  /**
+   * Astrology: per constellation, your knowledge, node picks waiting to be spent, how long until the next pick,
+   * and what each node you could pick next adds to your best gold/hr and XP/hr in the skill it boosts.
+   */
+  astroAdvice() {
+    if (this._cache.has('astro')) return this._cache.get('astro');
+    const A = this.g.astro;
+    if (!A) return [];
+    const base = new Map();
+    const bestBy = (eng, sk) => {
+      const money = PASSIVE_SKILLS.has(sk) ? null : eng.ranked('best', { skill: sk })[0];
+      const train = eng.trainOptions(sk)[0];
+      return { gph: money?.gph ?? 0, xph: train?.xph ?? 0, money, train };
+    };
+    const valueOf = new Map(); // bonus signature -> gains (nodes often repeat the same bonus)
+    const evalNode = (nid) => {
+      const nd = A.nodes[nid];
+      const sig = JSON.stringify(nd.b);
+      if (valueOf.has(sig)) return valueOf.get(sig);
+      const skills = [...new Set(nd.b.map(([, , , ctx]) => ctx.e).filter((s) => SKILL_ORDER.includes(s) || s === 'Astrology'))];
+      const res = { dGp: 0, dXp: 0, skill: skills[0] || null, modelled: false };
+      const testable = skills.filter((s) => !PASSIVE_SKILLS.has(s) && s !== 'Astrology');
+      if (testable.length && nd.b.some(([, , , ctx]) => !ctx.x)) {
+        const alt = this.withAstro([nid]);
+        for (const sk of testable) {
+          if (!base.has(sk)) base.set(sk, bestBy(this, sk));
+          const b0 = base.get(sk), b1 = bestBy(alt, sk);
+          const g = b1.gph - b0.gph, x = b0.xph > 0 ? (b1.xph - b0.xph) / b0.xph : 0;
+          if (g > res.dGp || (res.dGp === 0 && x > res.dXp)) { res.dGp = Math.max(res.dGp, g); res.skill = sk; }
+          res.dXp = Math.max(res.dXp, x);
+          if (Math.abs(g) > 1e-6 || Math.abs(x) > 1e-9) res.modelled = true;
+        }
+      }
+      valueOf.set(sig, res);
+      return res;
+    };
+    const out = [];
+    for (const c of A.cons) {
+      const m = this.byId.get('Astrology:' + c.id);
+      const st = m ? this.status(m) : null;
+      const a = this.astro?.[c.id] || { knowledge: 0, minor: [], major: [] };
+      const avail = c.thr.filter((t) => a.knowledge >= t).length;
+      const freeMinor = Math.max(0, avail - a.minor.length);
+      const freeMajor = Math.max(0, Math.floor(a.minor.length / c.per) - a.major.length);
+      const r = m && st.unlocked ? this.rate(m) : null;
+      const kph = r ? r.extra.knowledge * HOUR / r.ms : 0;
+      const need = c.thr[avail];
+      const next = need != null ? { need, hours: kph > 0 ? (need - a.knowledge) / kph : Infinity } : null;
+      const nodeOk = (nid) => (A.nodes[nid].r || []).every((q) => this.reqStatus(q).ok);
+      const picks = [];
+      if (st?.unlocked) {
+        for (const nid of c.minor) if (!a.minor.includes(nid) && nodeOk(nid)) picks.push({ id: nid, nd: A.nodes[nid], major: false, ...evalNode(nid) });
+        if (freeMajor > 0 || a.minor.length + freeMinor >= (a.major.length + 1) * c.per) {
+          for (const nid of c.major) if (!a.major.includes(nid) && nodeOk(nid)) picks.push({ id: nid, nd: A.nodes[nid], major: true, ...evalNode(nid) });
+        }
+      }
+      picks.sort((x, y) => y.dGp - x.dGp || y.dXp - x.dXp);
+      out.push({ c, m, unlocked: !!st?.unlocked, missing: st?.missing || [], knowledge: a.knowledge, have: a.minor.length, major: a.major.length, avail,
+        freeMinor, freeMajor, kph, xph: r ? r.xp * HOUR / r.ms : 0, next, picks, nodes: [...a.minor, ...a.major] });
+    }
+    this._cache.set('astro', out);
+    return out;
+  }
+
   /** Potions you can brew (or already own) that would raise your best rate in their skill, net of what they cost to use. */
   potionAdvice() {
     if (this._cache.has('potions')) return this._cache.get('potions');
@@ -1658,7 +1759,17 @@ export class Engine {
         key: 'enemy:' + g.enemy.id, base: chainBest.get('enemy:' + g.enemy.id) ?? 0,
         why: `+${Math.round(g.dGp).toLocaleString('en-US')} gp/hr fighting ${g.enemy.n}` });
     }
-    // 4) quests: one-off rewards, and the shop upgrades / areas they unlock
+    // 4) astrology: study a constellation to the next node and pick the one that pays most
+    for (const a of this.astroAdvice()) {
+      const pick = a.picks.find((x) => x.dGp > 0);
+      if (!pick || !a.unlocked) continue;
+      const hours = a.freeMinor > 0 || pick.major ? 0 : a.next?.hours;
+      if (!Number.isFinite(hours)) continue;
+      cands.push({ kind: 'astro', id: 'a:' + pick.id, title: `${a.c.n}: pick ${pick.nd.n}`, needs: [], actionHours: hours, gp: 0, gain: pick.dGp, skill: pick.skill, cons: a.c.id,
+        key: 'skill:' + pick.skill, base: chainBest.get('skill:' + pick.skill) ?? 0,
+        why: `+${Math.round(pick.dGp).toLocaleString('en-US')} gp/hr on ${pick.skill}${hours > 0 ? ` · study ${a.c.n} to ${a.next.need.toLocaleString('en-US')} knowledge` : ' · a node pick is waiting'}` });
+    }
+    // 5) quests: one-off rewards, and the shop upgrades / areas they unlock
     const quests = this.questList();
     for (const q of quests) {
       if (q.done || !Number.isFinite(q.hours)) continue;

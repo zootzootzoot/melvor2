@@ -980,3 +980,24 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 .sl-v { text-align: right; display: grid; }
 .sl-v b { font-size: 13px; }
 @media (max-width: 640px) { .sl-m { grid-template-columns: 28px minmax(0, 1fr) 60px; } .sl-m .sl-v:nth-of-type(3), .sl-m .sl-v:nth-of-type(4) { display: none; } }
+
+/* astrology */
+.as-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 10px; margin-top: 10px; }
+.as-card { padding: 12px 14px; border-radius: 12px; background: var(--panel, rgba(255,255,255,.03)); border: 1px solid var(--line); display: grid; gap: 8px; }
+.as-card.locked { opacity: .6; }
+.as-h { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.as-h > span:nth-child(2) { display: grid; min-width: 0; }
+.as-h small { font-size: 12px; color: var(--text-3); }
+.as-next { font-size: 12px; color: var(--text-2); }
+.as-have { display: flex; flex-wrap: wrap; gap: 4px; }
+.as-have span { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: rgba(255, 200, 80, .12); color: var(--gold, #f5c451); cursor: help; }
+.as-picks { display: grid; gap: 4px; }
+.as-pick { display: grid; grid-template-columns: 100px minmax(0, 1fr) 84px; gap: 10px; align-items: center; padding: 6px 9px; border-radius: 8px; background: rgba(0, 0, 0, .2); border: 1px solid transparent; font-size: 13px; }
+.as-pick.best { border-color: rgba(120, 220, 150, .35); }
+.as-node { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+.as-fx { min-width: 0; }
+.as-gain { display: grid; justify-items: end; line-height: 1.1; }
+.as-gain small { font-size: 10px; color: var(--text-3); }
+.as-locked { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 13px; }
+.as-locked span { display: inline-flex; gap: 6px; align-items: center; }
+@media (max-width: 640px) { .as-grid { grid-template-columns: 1fr; } .as-pick { grid-template-columns: 1fr 74px; } .as-node { display: none; } }

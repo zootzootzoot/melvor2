@@ -2,7 +2,7 @@
 // Save string = Base64( Brotli( SaveWriter stream ) ). The game flushes the Brotli
 // stream without closing it, so the stream is "truncated" by design: we decode
 // with a streaming decoder and accept NeedsMoreInput at the end.
-import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611250025';
+import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611250032';
 
 let brotliReady = null;
 /** For Node tests: initialise the decoder from wasm bytes instead of fetching it. */
@@ -332,9 +332,33 @@ export async function decodeSave(input) {
       }
     } catch { /* tolerate */ }
   }
+  // Astrology/Action: action timer, 2 bools, then per constellation (string id, region{double knowledge, int n, n x string minor, int m, m x string major})
+  const astro = {};
+  const ac = ents.Astrology?.Action;
+  if (ac) {
+    try {
+      // skip the action-timer state: find the constellation count followed by a namespaced id
+      let p = ac.pos;
+      const end = ac.pos + ac.len;
+      const looksLikeId = (q) => raw[q] > 11 && raw[q] < 64 && String.fromCharCode(...raw.subarray(q + 1, q + 12)) === 'MelvorBase:';
+      while (p < end - 16 && !(raw[p] > 0 && raw[p] < 64 && raw[p + 1] === 0 && raw[p + 2] === 0 && raw[p + 3] === 0 && looksLikeId(p + 4))) p++;
+      const r = new Reader(raw, p);
+      const n = r.i32();
+      for (let i = 0; i < n; i++) {
+        const id = short(r.str()); const len = r.i32(); const e = r.p + len;
+        try {
+          const knowledge = r.f64();
+          const minor = []; const nm = r.i32(); for (let k = 0; k < nm; k++) minor.push(short(r.str()));
+          const major = []; const nM = r.i32(); for (let k = 0; k < nM; k++) major.push(short(r.str()));
+          astro[id] = { knowledge, minor, major };
+        } catch { /* skip */ }
+        r.p = e;
+      }
+    } catch { /* tolerate */ }
+  }
   // one lookup across every statistics table: stats.all[statistic][id] = value
   stats.all = {};
   for (const kind of ['items', 'currencies', 'enemies', 'dungeons', 'styles', 'effects', 'prayers']) for (const [k, v] of Object.entries(stats[kind])) stats.all[k] = { ...(stats.all[k] || {}), ...v };
   const components = Object.fromEntries(Object.entries(ents).map(([k, v]) => [k, Object.keys(v)]));
-  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, quests, slayer, entities: Object.keys(ents), components };
+  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, quests, slayer, astro, entities: Object.keys(ents), components };
 }

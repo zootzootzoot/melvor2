@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611250025';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250025';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250025';
+import { decodeSave } from './save.js?v=202611250032';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250032';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250032';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -727,7 +727,7 @@ function chainTree(chain) {
 // ---------------------------------------------------------------- training
 function viewTrain() {
   const e = E(), g = G(), s = state.save;
-  const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k)), ...(state.explorer ? [] : [...COMBAT_SKILLS, 'Slayer'])];
+  const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k)), ...(e.methods.some((m) => m.s === 'Astrology') ? ['Astrology'] : []), ...(state.explorer ? [] : [...COMBAT_SKILLS, 'Slayer'])];
   if (!skills.includes(state.trainSkill)) {
     // default: the skill closest to its next level by time
     state.trainSkill = skills.map((k) => ({ k, o: e.trainOptions(k)[0] })).filter((x) => x.o).sort((a, b) => {
@@ -794,6 +794,7 @@ function viewTrain() {
           return `<div class="sup" data-item="${esc(x.item)}">${img(itemIcon(x.item), '', 26)}<div><b>${esc(e.name(x.item))}</b><span class="num">${fmtNum(x.qty)} needed · you have ${fmtNum(x.have)}${made ? ` · route makes ${fmtNum(x.made)}` : ''}</span></div>${made ? `<span class="pill">${svg.check}made</span>` : miss > 0 ? `<span class="pill red num">−${fmtGp(miss)}</span>` : `<span class="pill green">${svg.check}</span>`}</div>`;
         }).join('')}</div>` : ''}
       </div>` : ''}
+      ${sk === 'Astrology' && !state.explorer ? astroPanel() : ''}
       ${state.explorer ? '' : guildSection(sk)}
       <div class="section-sub">
         <h4>Every way to train ${sk}</h4>
@@ -886,7 +887,7 @@ function guildBadge(sk) {
 const KIND = {
   unlock: { label: 'Unlock', cls: 'k-unlock' }, shop: { label: 'Upgrade', cls: 'k-shop' },
   gear: { label: 'Gear', cls: 'k-gear' }, quest: { label: 'Quest', cls: 'k-quest' },
-  train: { label: 'Train', cls: 'k-unlock' }, guild: { label: 'Guild', cls: 'k-quest' }, kill: { label: 'Kill', cls: 'k-gear' },
+  train: { label: 'Train', cls: 'k-unlock' }, guild: { label: 'Guild', cls: 'k-quest' }, kill: { label: 'Kill', cls: 'k-gear' }, astro: { label: 'Astrology', cls: 'k-quest' },
 };
 
 function goalPicker() {
@@ -991,8 +992,8 @@ function viewPlan() {
     for (const k of st.kills || []) pre.push(`<span class="pre">${img(G().combat.enemies[k.enemy]?.i, '', 14)}Kill ${fmtNum(k.left)} ${esc(k.name)}<span class="muted"> · ${fmtDuration(k.hours)}${k.style ? ' ' + esc(k.style.toLowerCase()) : ''}</span></span>`);
     if (st.earn > 0.005) pre.push(`<span class="pre">${img(G().currencies.GoldPieces, '', 14)}Save up ${fmtGp(st.gp)} gold<span class="muted"> · ${fmtDuration(st.earn)} of ${esc(plan.steps[i - 1]?.bestName || plan.startName)}</span></span>`);
     if (st.items?.length) pre.push(...st.items.filter(([it, q]) => (e.bank[it] || 0) < q).map(([it, q]) => `<span class="pre" data-item="${esc(it)}">${img(itemIcon(it), '', 14)}Get ${fmtNum(q - (e.bank[it] || 0))} ${esc(e.name(it))}</span>`));
-    const icon = st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'quest' ? G().skills.Quests?.i || G().skills.CompletionLog?.i : st.kind === 'gear' ? itemIcon(st.id.slice(2)) : G().shop[st.id.slice(2)]?.i;
-    const target = st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'unlock' ? `data-tskill-go="${esc(st.needs[0]?.skill || st.m.s)}" data-target-go="${st.needs[0]?.level || st.m.lv}"` : st.kind === 'gear' ? `data-item="${esc(st.id.slice(2))}"` : 'data-gotab="upgrades"';
+    const icon = st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'quest' ? G().skills.Quests?.i || G().skills.CompletionLog?.i : st.kind === 'gear' ? itemIcon(st.id.slice(2)) : st.kind === 'astro' ? G().astro.cons.find((c) => c.id === st.cons)?.i : G().shop[st.id.slice(2)]?.i;
+    const target = st.kind === 'astro' ? `data-tskill-go="Astrology" data-target-go="${E().level('Astrology') + 1}"` : st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'unlock' ? `data-tskill-go="${esc(st.needs[0]?.skill || st.m.s)}" data-target-go="${st.needs[0]?.level || st.m.lv}"` : st.kind === 'gear' ? `data-item="${esc(st.id.slice(2))}"` : 'data-gotab="upgrades"';
     return `<li class="ps ${k.cls}">
       <span class="ps-n num">${i + 1}</span>
       <div class="ps-card panel" role="button" tabindex="0" ${target}>
@@ -1131,6 +1132,7 @@ function viewUpgrades() {
   ${list.length ? `<div class="up-grid stagger">${list.map(card).join('')}</div>` : `<div class="empty"><b>Nothing new within reach.</b>You own every skilling upgrade you currently qualify for.</div>`}
   ${gearSection()}
   ${potionSection()}
+  ${astroSection()}
   <details class="owned">
     <summary><b>Upgrades you own</b> <span class="muted">${owned.length} active · already counted in every rate</span></summary>
     <div class="owned-grid">${owned.map((o) => `<div class="owned-item">${img(o.i || itemIcon(o.id), '', 24)}<div><b>${esc(o.n)}</b><span>${o.b.map((b) => { const t = bonusText(b, lookup); return `${t.val} ${esc(t.label)}${t.where ? ` (${esc(t.where)})` : ''}`; }).join(' · ')}</span></div>${o.kind === 'tool' ? '<span class="pill">equipped</span>' : ''}</div>`).join('')}</div>
@@ -1154,6 +1156,64 @@ function gearSection() {
       <div class="pot-k"><small>gold / hr</small><b class="num gold">+${fmtGp(x.dGp)}</b></div>
     </div>`;
   }).join('')}</div>`;
+}
+
+/** What a node does, in words. */
+function nodeText(nd) {
+  const fx = (nd.b || []).map((b) => bonusText(b, lookup)).filter((f) => !/knowledge/i.test(f.label) || nd.b.length === 1);
+  return fx.length ? fx.map((f) => `${f.val} ${f.label}${f.skill && !/^(Combat|Astrology)$/.test(f.skill) ? ' (' + f.skill + ')' : f.where ? ' (' + f.where + ')' : ''}`).join(', ') : (nd.d || '');
+}
+
+function pickGain(x) {
+  return x.dGp > 0.5 ? `<b class="num green">+${fmtGp(x.dGp)}</b><small>gp/hr</small>` : x.dXp > 0.0005 ? `<b class="num green">+${fmtPct(x.dXp, 1)}</b><small>xp/hr</small>` : '<b class="muted">—</b><small>not modelled</small>';
+}
+
+/** Nodes with the same bonus (e.g. B1 and B2) shown as one choice. */
+function groupPicks(picks) {
+  const out = new Map();
+  for (const x of picks) {
+    const k = (x.major ? 'M' : 'm') + JSON.stringify(x.nd.b) + (x.nd.d || '');
+    if (out.has(k)) out.get(k).names.push(x.nd.n); else out.set(k, { ...x, names: [x.nd.n] });
+  }
+  return [...out.values()];
+}
+
+function astroPanel() {
+  const e = E();
+  const list = e.astroAdvice();
+  if (!list.length) return '';
+  const N = G().astro.nodes;
+  const card = (a) => {
+    const thrPrev = a.c.thr[a.avail - 1] || 0;
+    const pct = a.next ? Math.min(100, ((a.knowledge - thrPrev) / (a.next.need - thrPrev)) * 100) : 100;
+    const wait = a.freeMinor + a.freeMajor;
+    return `<div class="as-card ${a.unlocked ? '' : 'locked'}">
+      <div class="as-h">${img(a.c.i, '', 34)}<span><b>${esc(a.c.n)}</b><small>${a.unlocked ? `${fmtNum(a.knowledge)} knowledge · ${a.have}/${a.c.minor.length} minor · ${a.major}/${a.c.major.length} major` : esc(a.missing.map((r) => r.text).join(', '))}</small></span>
+        ${wait ? `<span class="pill gold">${wait} pick${wait === 1 ? '' : 's'} waiting</span>` : a.unlocked && a.next ? `<span class="as-next num">next pick in ${fmtDuration(a.next.hours)}</span>` : ''}</div>
+      ${a.unlocked ? `<div class="xpbar"><i style="width:${pct}%"></i></div>` : ''}
+      ${a.nodes.length ? `<div class="as-have">${a.nodes.map((id) => `<span title="${esc(nodeText(N[id]))}">${esc(N[id].n)}</span>`).join('')}</div>` : ''}
+      ${a.picks.length ? `<div class="as-picks">${groupPicks(a.picks).slice(0, 4).map((x, i) => `<div class="as-pick ${i === 0 && (x.dGp > 0.5 || x.dXp > 0.0005) ? 'best' : ''}"><span class="as-node">${x.major ? 'Major' : 'Minor'} ${esc(x.names.join(' / '))}</span><span class="as-fx">${esc(nodeText(x.nd))}</span><span class="as-gain">${pickGain(x)}</span></div>`).join('')}</div>` : ''}
+    </div>`;
+  };
+  const open = list.filter((a) => a.unlocked), shut = list.filter((a) => !a.unlocked);
+  return `<div class="section-sub" style="margin-top:22px"><h4>Constellations</h4><span class="muted" style="font-size:13px">Studying builds knowledge. Each threshold gives a minor node pick, and every ${list[0].c.per} minor nodes a major pick. Picks are ranked by what they add to your best method in the skill they boost. Read from your save.</span></div>
+  <div class="as-grid">${open.map(card).join('')}</div>
+  ${shut.length ? `<div class="as-locked">${shut.map((a) => `<span>${img(a.c.i, '', 20)}${esc(a.c.n)} <small class="muted">${esc(a.missing.map((r) => r.text).join(', '))}</small></span>`).join('')}</div>` : ''}`;
+}
+
+function astroSection() {
+  const e = E();
+  const rows = e.astroAdvice().filter((a) => a.unlocked).flatMap((a) => groupPicks(a.picks.filter((x) => x.dGp > 0.5 || x.dXp > 0.0005)).slice(0, 2).map((x) => ({ a, x })))
+    .sort((p, q) => q.x.dGp - p.x.dGp || q.x.dXp - p.x.dXp).slice(0, 8);
+  if (!rows.length) return '';
+  return `<div class="section-sub" style="margin-top:26px"><h4>Astrology nodes worth picking</h4><span class="muted" style="font-size:13px">The best next node in each constellation you can study, measured on your best method. Picks need knowledge from studying that constellation.</span></div>
+  <div class="pot-list stagger">${rows.map(({ a, x }) => `<div class="pot-row" data-tskill-go="Astrology" data-target-go="${e.level('Astrology') + 1}">
+      ${img(a.c.i, '', 32)}
+      <div class="title"><b>${esc(a.c.n)} ${esc(x.names.join(' / '))}</b><span class="sub">${x.skill ? img(skillIcon(x.skill), '', 14) + x.skill + '<span class="sep">·</span>' : ''}${esc(nodeText(x.nd))}</span></div>
+      <div class="pot-k"><small>gold / hr</small><b class="num ${x.dGp > 0.5 ? 'green' : 'muted'}">${x.dGp > 0.5 ? '+' + fmtGp(x.dGp) : '—'}</b></div>
+      <div class="pot-k"><small>xp / hr</small><b class="num ${x.dXp > 0.0005 ? 'green' : 'muted'}">${x.dXp > 0.0005 ? '+' + fmtPct(x.dXp, 1) : '—'}</b></div>
+      <div class="pot-k"><small>when</small><b class="num">${a.freeMinor > 0 || (x.major && a.freeMajor > 0) ? 'now' : a.next ? fmtDuration(a.next.hours) : '—'}</b></div>
+    </div>`).join('')}</div>`;
 }
 
 function potionSection() {

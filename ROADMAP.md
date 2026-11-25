@@ -3,6 +3,7 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Astrology: constellations and node picks read from the save, node bonuses applied to every rate, next-pick advisor (Training + Upgrades), node picks in the Plan; Astrology trainable. Agility checked: it only boosts itself in MI2
 - Kill-count unlocks read from the save: dungeons behind "Kill N enemy" or slayer-task counts show your progress, goal routes add the kills (with the loadout and time), and Next unlocks counts them
 - Slayer (current task, coins/XP/gold per master, Slayer training) and dungeons (wave-by-wave runs, end rewards, chests valued at contents)
 - Goals on the Plan tab: route to a quest, level or unlock with resolved prerequisites and time-saving upgrade detours
@@ -28,8 +29,7 @@ What players would pay for, ordered by value versus effort. Done items stay list
 
 ## Up next, in order
 1. **Combat, part 3.** Enemy special attacks and passives, prayers.
-2. **More bonus sources.** Agility obstacles and astrology nodes.
-3. **Farming planner.** Per-plot profit per growth cycle with compost, the best crop for each plot type, and a timer-aware schedule.
-4. **Item & recipe browser.** Filterable database of every item and recipe with values, sources and uses.
-5. **Multiple characters.** Switch between saved characters and compare them.
-6. **Shareable cards.** An image card of your profile and best methods for Discord.
+2. **Farming planner.** Per-plot profit per growth cycle with compost, the best crop for each plot type, and a timer-aware schedule.
+3. **Item & recipe browser.** Filterable database of every item and recipe with values, sources and uses.
+4. **Multiple characters.** Switch between saved characters and compare them.
+5. **Shareable cards.** An image card of your profile and best methods for Discord.
