@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611250002';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250002';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250002';
+import { decodeSave } from './save.js?v=202611250003';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250003';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250003';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -880,6 +880,7 @@ function viewPlan() {
     const k = KIND[st.kind] || KIND.unlock;
     const pre = [];
     for (const t of st.trainSteps || []) pre.push(`<button class="pre linkish-plain" data-tskill-go="${esc(t.skill)}" data-target-go="${t.level}">${img(skillIcon(t.skill), '', 14)}Train ${esc(t.skill)} to ${t.level}<span class="muted"> · ${fmtDuration(t.hours)}</span></button>`);
+    if (st.guild) pre.push(`<button class="pre linkish-plain" data-tskill-go="${esc(st.guild.skill)}" data-target-go="${(E().level(st.guild.skill) || 1) + 1}">${img(skillIcon(st.guild.skill), '', 14)}Reach ${esc(st.guild.name)} (guild tasks)<span class="muted"> · ${fmtDuration(st.guild.hours)}</span></button>`);
     if (st.earn > 0.005) pre.push(`<span class="pre">${img(G().currencies.GoldPieces, '', 14)}Save up ${fmtGp(st.gp)} gold<span class="muted"> · ${fmtDuration(st.earn)} of ${esc(plan.steps[i - 1]?.bestName || plan.startName)}</span></span>`);
     if (st.items?.length) pre.push(...st.items.filter(([it, q]) => (e.bank[it] || 0) < q).map(([it, q]) => `<span class="pre" data-item="${esc(it)}">${img(itemIcon(it), '', 14)}Get ${fmtNum(q - (e.bank[it] || 0))} ${esc(e.name(it))}</span>`));
     const icon = st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'quest' ? G().skills.Quests?.i || G().skills.CompletionLog?.i : st.kind === 'gear' ? itemIcon(st.id.slice(2)) : G().shop[st.id.slice(2)]?.i;

@@ -1,4 +1,4 @@
-import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250002';
+import { playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611250003';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -1069,7 +1069,19 @@ export class Engine {
     for (const m of this.methods) {
       if (m.k === 'passive' || m.quest) continue;
       const st = this.status(m);
-      if (st.unlocked || !st.onlyLevelLocked || st.levelGap > maxGap) continue;
+      if (st.unlocked || st.levelGap > maxGap) continue;
+      // locked only by levels, or by levels plus the next mastery guild rank (reachable via guild tasks)
+      const rankMiss = st.missing.filter((x) => x.kind === 'rank');
+      if (st.missing.some((x) => x.kind !== 'lvl' && x.kind !== 'rank')) continue;
+      let guild = null;
+      if (rankMiss.length) {
+        const r0 = m.r.find((q) => q.t === 'rank');
+        const gs = this.guild?.[r0?.s];
+        if (rankMiss.length > 1 || !gs || gs.next !== r0.id) continue;
+        const gp = this.guildPlan(r0.s);
+        if (!gp?.reachable) continue;
+        guild = { skill: r0.s, rank: r0.id, name: this.guildName(r0.s, r0.id), hours: gp.hours };
+      }
       const lv = { ...this.levels };
       for (const r of m.r) if (r.t === 'lvl') lv[r.s] = Math.max(lv[r.s] ?? 1, r.l);
       const r = this.rate(m, lv);
@@ -1089,8 +1101,8 @@ export class Engine {
       const need = new Map();
       for (const x of st.missing) if (x.kind === 'lvl') need.set(x.skill, Math.max(need.get(x.skill) || 0, x.need));
       const needs = [...need.entries()].map(([skill, level]) => ({ skill, level, gap: level - this.level(skill) }));
-      const hours = needs.reduce((a, n) => a + timeTo(n.skill, n.level), 0);
-      out.push({ m, gph, r, needs, hours, gap: st.levelGap, beatsAll: gph > nowBest, gain: gph - nowBest, skillGain: gph - sb, skillBest: skillBest.get(m.s) });
+      const hours = needs.reduce((a, n) => a + timeTo(n.skill, n.level), 0) + (guild?.hours || 0);
+      out.push({ m, gph, r, needs, hours, guild, gap: st.levelGap, beatsAll: gph > nowBest, gain: gph - nowBest, skillGain: gph - sb, skillBest: skillBest.get(m.s) });
     }
     // keep the best option per (skill, unlock level), then order by how soon it pays off
     const seen = new Map();
@@ -1468,7 +1480,7 @@ export class Engine {
 
     // 1) better methods behind levels
     for (const x of this.betterUnlocks().list) {
-      cands.push({ kind: 'unlock', id: 'u:' + x.m.id, m: x.m, title: `Unlock ${x.m.n}`, needs: x.needs, actionHours: 0, gp: 0, newRate: x.gph,
+      cands.push({ kind: 'unlock', id: 'u:' + x.m.id, m: x.m, title: `Unlock ${x.m.n}`, needs: x.needs, actionHours: x.guild?.hours || 0, guild: x.guild, gp: 0, newRate: x.gph,
         why: `${x.m.s}${x.m.loc ? ' · ' + x.m.loc : ''}: ${Math.round(x.gph).toLocaleString('en-US')} gp/hr from scratch` });
     }
     // 2) shop upgrades (with their level requirements)
