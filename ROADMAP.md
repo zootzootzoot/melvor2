@@ -3,6 +3,7 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Overview home: plain-words account read, act-now alerts, next steps, levels that open the most, what quests wait on; tabs cut from 9 to 8 with clearer roles (Upgrades inside Plan, Next unlocks folded into Overview, Bank and Money views trimmed); slim header off the home page
 - Getting ready for a fight: gear + training search for unsafe enemies, money phase, root-cause messages; Fights within reach panel; A fight goal; readiness inside item routes and dungeon unlocks
 - Leftovers put to use: XP per skill from processing your bank (chained), training saved, route coverage, quest hand-ins to keep
 - How to get any item: cross-system dependency resolver (bank, shop, recipes, enemy drops, dungeons, upgrades, chests; levels, quests, kills; food) into one ordered plan, with root-cause explanations

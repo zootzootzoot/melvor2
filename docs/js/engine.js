@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611260603';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611260612';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -2011,6 +2011,118 @@ export class Engine {
     skills.sort((a, b) => (b.need > b.from) - (a.need > a.from) || b.saved - a.saved);
     const res = { keep: [...keep].map(([item, k]) => ({ item, qty: k.qty, have: this.bank[item] || 0, why: [...k.why] })), skills, need };
     this._cache.set('leftovers', res);
+    return res;
+  }
+
+  // ---------------------------------------------------------------- account read
+  /**
+   * A high-level read of the account: what stage it's at, what it leans on, the level gates that hold back the most
+   * (everything a level opens: quests, combat areas, dungeons, better money makers, farm plots, shop upgrades, gear you
+   * already own but can't wear), what quests are waiting on, and things to act on now.
+   */
+  accountRead() {
+    if (this._cache.has('read')) return this._cache.get('read');
+    const C = this.g.combat;
+    const p = this.p;
+    // stage: how far through the levels and quests
+    const lvSkills = Object.entries(p.skills || {}).filter(([k]) => this.g.skills[k] && k !== 'Combat');
+    const pct = lvSkills.reduce((a, [, v]) => a + Math.min(99, v.level), 0) / Math.max(1, lvSkills.length * 99);
+    const quests = this.questList();
+    const qDone = quests.filter((q) => q.done).length;
+    const stage = pct < 0.2 ? 'Early game' : pct < 0.35 ? 'Early–mid game' : pct < 0.6 ? 'Mid game' : pct < 0.85 ? 'Late game' : 'Endgame';
+    const top = lvSkills.slice().sort((a, b) => b[1].level - a[1].level).slice(0, 3).map(([k, v]) => ({ skill: k, level: v.level }));
+    const lowest = lvSkills.filter(([k]) => !['Ranching', 'Farming'].includes(k)).sort((a, b) => a[1].level - b[1].level).slice(0, 3).map(([k, v]) => ({ skill: k, level: v.level }));
+    const best = this.ranked('best')[0] || null;
+    const scratch = this.ranked('chain')[0] || null;
+    const afk = this.ranked('afk', { window: 8 })[0] || null;
+    const farm = this.farmPlan?.() || null;
+    const cl = combatLevels(p);
+    const styles = { Melee: Math.max(cl.Attack, cl.Strength), Ranged: cl.Ranged, Magic: cl.Magic };
+    const mainStyle = Object.entries(styles).sort((a, b) => b[1] - a[1])[0][0];
+
+    // ---- gates: things a few levels away, attributed to the skill with the biggest gap
+    const better = new Map(this.betterUnlocks(30).list.map((x) => [x.m.id, x]));
+    const things = [];
+    const add = (kind, name, reqs, extra = {}) => {
+      const st = reqs.map((r) => this.reqStatus(r));
+      if (st.every((x) => x.ok)) return;
+      const miss = st.filter((x) => !x.ok);
+      if (miss.some((x) => x.kind !== 'lvl')) return; // only things levels alone stand between
+      const lv = new Map();
+      for (const x of miss) lv.set(x.skill, Math.max(lv.get(x.skill) || 0, x.need));
+      const [skill, need] = [...lv].sort((a, b) => (b[1] - this.level(b[0])) - (a[1] - this.level(a[0])))[0];
+      if (need - this.level(skill) > 20 || NOT_TRAINABLE.has(skill)) return;
+      things.push({ kind, name, skill, need, also: [...lv].filter(([s]) => s !== skill), ...extra });
+    };
+    const W = { quest: 4, area: 3, dungeon: 3, money: 3, plot: 2, shop: 1.2, gear: 1.5, recipe: 0.25 };
+    for (const q of quests) if (!q.done) add('quest', q.Q.n, [...q.Q.r.filter((r) => r.t === 'lvl'), ...(q.training || []).map((t) => ({ t: 'lvl', s: t.skill, l: t.level }))], { id: q.id });
+    for (const [, a] of Object.entries(C?.areas || {})) if (a.enemies?.length && a.cat !== 'Quests') add('area', a.n, a.r || []);
+    for (const [, d] of Object.entries(C?.dungeons || {})) add('dungeon', d.n, (d.r || []).filter((r) => r.t === 'lvl'));
+    for (const m of this.methods) {
+      if (m.quest || m.s === 'Combat' || !m.r.some((r) => r.t === 'lvl')) continue;
+      const b = better.get(m.id);
+      const strong = b && b.gph >= (best?.gph || 0) * 0.5;
+      add(strong ? 'money' : 'recipe', m.n, m.r, b ? { gph: b.gph, m } : { m });
+    }
+    for (const [id, s] of Object.entries(this.g.shop)) if (s.b && !(this.shopOwned[id] > 0)) add('shop', s.n, s.r || [], { id });
+    for (const [id, pl] of Object.entries(this.g.farm?.plots || {})) if (!(p.farm?.plots?.[id]?.state > 0)) add('plot', pl.n, pl.r || []);
+    for (const id of Object.keys(this.bank)) { const eq = this.items[id]?.eq; if (eq?.r?.length) add('gear', this.items[id].n, eq.r, { id }); }
+    const bySkill = new Map();
+    for (const t of things) { if (!bySkill.has(t.skill)) bySkill.set(t.skill, []); bySkill.get(t.skill).push(t); }
+    const gates = [];
+    for (const [skill, list] of bySkill) {
+      const levels = [...new Set(list.map((t) => t.need))].sort((a, b) => a - b);
+      let bestG = null;
+      for (const L of levels) {
+        const opened = list.filter((t) => t.need <= L);
+        const weight = opened.reduce((a, t) => a + (W[t.kind] || 0.25), 0);
+        const hours = this.trainHours(skill, L);
+        if (!Number.isFinite(hours) || weight < 2) continue;
+        const score = weight / Math.max(hours, 0.25);
+        if (!bestG || score > bestG.score) bestG = { skill, level: L, from: this.level(skill), hours, weight, score, opened };
+      }
+      if (bestG) gates.push(bestG);
+    }
+    gates.sort((a, b) => b.score - a.score);
+    // ---- what unfinished quests wait on
+    const questWait = new Map();
+    for (const q of quests) {
+      if (q.done) continue;
+      const need = new Map();
+      for (const r of q.Q.r) if (r.t === 'lvl' && this.level(r.s) < r.l) need.set(r.s, Math.max(need.get(r.s) || 0, r.l));
+      for (const t of q.training || []) need.set(t.skill, Math.max(need.get(t.skill) || 0, t.level));
+      for (const [s, l] of need) { const w = questWait.get(s) || { skill: s, level: 0, first: Infinity, quests: [] }; w.level = Math.max(w.level, l); w.first = Math.min(w.first, l); w.quests.push(q.Q.n); questWait.set(s, w); }
+    }
+    // ---- act now
+    const alerts = [];
+    const astro = this.astroAdvice?.() || [];
+    const picks = astro.reduce((a, x) => a + x.freeMinor + x.freeMajor, 0);
+    if (picks) alerts.push({ kind: 'astro', text: `${picks} astrology node pick${picks === 1 ? '' : 's'} waiting`, go: 'train', skill: 'Astrology' });
+    if (farm?.known) {
+      const since = p.header?.timestamp ? Date.now() - new Date(p.header.timestamp).getTime() : 0;
+      const ready = farm.plots.filter((x) => !x.empty && (x.ready || x.leftMs - since <= 0)).length;
+      const empty = farm.plots.filter((x) => x.empty && x.pl.c !== 'CompostBins').length;
+      if (ready) alerts.push({ kind: 'farm', text: `${ready} farm plot${ready === 1 ? ' is' : 's are'} ready to harvest`, go: 'farm' });
+      if (empty) alerts.push({ kind: 'farm', text: `${empty} farm plot${empty === 1 ? ' is' : 's are'} empty`, go: 'farm' });
+    }
+    const wallet = p.wallet?.GoldPieces ?? p.header?.gp ?? 0;
+    const buyNow = this.upgradeAdvice().filter((a) => a.dGp > 0 && !a.gap && a.affordable).sort((a, b) => a.payback - b.payback);
+    if (buyNow.length) alerts.push({ kind: 'shop', text: `You can afford ${buyNow[0].s.n} now: +${Math.round(buyNow[0].dGp).toLocaleString('en-US')} gp/hr${buyNow.length > 1 ? ` (and ${buyNow.length - 1} more)` : ''}`, go: 'plan', sub: 'upgrades' });
+    const nextQ = quests.find((q) => !q.done && q.available && Number.isFinite(q.hours));
+    if (nextQ) alerts.push({ kind: 'quest', text: `${nextQ.Q.n} is ready to start (about ${fmtDuration(nextQ.hours)})`, go: 'quests', id: nextQ.id });
+    for (const [mid, t] of Object.entries(p.slayer || {})) {
+      const plan = this.combatPlan(t.enemy, 'money');
+      if (!plan) alerts.push({ kind: 'slayer', text: `Your slayer task (${C.enemies[t.enemy]?.n || t.enemy}) isn't safe with your gear: reroll it or get ready`, go: 'money', enemy: t.enemy });
+    }
+    let leftovers = null;
+    try { leftovers = this.leftovers().skills.filter((x) => x.saved > 0.5).sort((a, b) => b.saved - a.saved)[0] || null; } catch { leftovers = null; }
+    if (leftovers) alerts.push({ kind: 'bank', text: `Your bank holds ${leftovers.skill} ${leftovers.from} → ${leftovers.to} worth of XP (saves ${fmtDuration(leftovers.saved)} of training)`, go: 'bank' });
+    const res = {
+      stage, pct, qDone, qTotal: quests.length, top, lowest, best, scratch, afk, farmGph: farm?.gph || 0, mainStyle, styles,
+      gates: gates.slice(0, 4), questWait: [...questWait.values()].sort((a, b) => b.quests.length - a.quests.length || (a.level - this.level(a.skill)) - (b.level - this.level(b.skill))).slice(0, 4),
+      alerts, wallet,
+    };
+    this._cache.set('read', res);
     return res;
   }
 

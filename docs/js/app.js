@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=202611260603';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260603';
-import { drawCard } from './card.js?v=202611260603';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260603';
+import { decodeSave } from './save.js?v=202611260612';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260612';
+import { drawCard } from './card.js?v=202611260612';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260612';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -27,20 +27,20 @@ function storeChars(c) {
 }
 
 const MODES = {
-  best: { label: 'Best overall', desc: 'Whichever pays more: making it from scratch, or using what is already in your bank' },
-  chain: { label: 'From scratch', desc: 'You gather every input yourself, or buy it when the shop is cheaper' },
-  bank: { label: 'From your bank', desc: 'Only what your current bank can fuel, and how long it lasts' },
+  best: { label: 'Best now', desc: 'Whichever pays more: making it from scratch, or using what is already in your bank' },
+  chain: { label: 'From scratch', desc: 'Sustainable: you gather every input yourself, or buy it when the shop is cheaper' },
   afk: { label: 'Leave it running', desc: 'One action left going while you are away: gathering, or working through your bank' },
-  sell: { label: 'Value added', desc: 'The best crafts, with inputs priced at what they would sell for' },
 };
+// older views still reachable from links (bank-limited rates, value added)
+const HIDDEN_MODES = { bank: { label: 'From your bank' }, sell: { label: 'Value added' } };
 const TABS = {
-  plan: 'Plan', money: 'Money makers', train: 'Training', quests: 'Quests', farm: 'Farm', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks', items: 'Items',
+  overview: 'Overview', plan: 'Plan', money: 'Money', train: 'Skills', quests: 'Quests', farm: 'Farm', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks', items: 'Items',
 };
 
 const state = {
   game: null, engine: null, base: null, save: null, explorer: false,
-  tab: 'money', mode: 'best', skill: '', q: '', passive: false, limit: 30, open: new Set(),
-  bankView: 'use', bankSort: 'value', bankQ: '', bankSortTotal: true,
+  tab: 'overview', mode: 'best', skill: '', q: '', passive: false, limit: 30, open: new Set(),
+  planView: 'route', bankView: 'use', bankSort: 'value', bankQ: '', bankSortTotal: true,
   db: { view: 'items', q: '', cat: '', skill: '', owned: false, sort: 'value', limit: 60 },
   mods: true, trainSkill: '', trainTarget: null, trainPrefer: 'xp', trainLevel: null,
   upSort: 'payback', upFilter: 'all', history: null, window: 8, horizon: 96, goal: null,
@@ -271,14 +271,15 @@ function renderTeaser() {
 
 // ---------------------------------------------------------------- dashboard
 function tabList() {
-  return state.explorer ? ['money', 'train', 'items'] : ['plan', 'money', 'train', 'quests', 'farm', 'upgrades', 'bank', 'unlocks', 'items'];
+  return state.explorer ? ['money', 'train', 'items'] : ['overview', 'plan', 'money', 'train', 'quests', 'farm', 'bank', 'items'];
 }
 
 function renderDashboard() {
   const e = E();
   const s = state.save;
   const g = G();
-  if (!tabList().includes(state.tab)) state.tab = 'money';
+  if (state.tab === 'upgrades') { state.tab = 'plan'; state.planView = 'upgrades'; }
+  if (!tabList().includes(state.tab)) state.tab = state.explorer ? 'money' : 'overview';
   tabsEl.hidden = false;
   tabsEl.innerHTML = tabList().map((k) => `<button class="tab" role="tab" data-tab="${k}" aria-selected="${state.tab === k}">${TABS[k]}</button>`).join('');
   topRight.innerHTML = `
@@ -309,7 +310,15 @@ function renderDashboard() {
     return s.skills[k].level - levelFromXp(prev.xp[k]);
   };
 
-  app.innerHTML = `
+  state.headSlim = state.explorer ? '' : `<div class="slimbar fade-in">
+    <b class="sb-name">${esc(s.header.name)}</b>
+    <span>Total level <b class="num">${fmtNum(s.header.totalLevel)}</b></span>
+    ${best ? `<span>${img(skillIcon(best.m.s), '', 16)}<b class="num gold">${fmtGp(best.gph)}</b>/hr · ${esc(best.m.n)}</span>` : ''}
+    <span>${img(g.currencies.GoldPieces, '', 16)}<b class="num">${fmtGp(s.wallet?.GoldPieces ?? s.header.gp ?? 0)}</b></span>
+    <span>${img(g.skills.Bank?.i, '', 16)}<b class="num">${fmtGp(bv.total)}</b> in bank</span>
+    <button class="linkish" data-go="overview">Overview</button>
+  </div>`;
+  state.headFull = `
   <section class="profile fade-in">
     <div>
       <span class="eyebrow">${state.explorer ? 'Sandbox' : 'Ledger of'}</span>
@@ -321,12 +330,12 @@ function renderDashboard() {
         ${delta ? `<span class="pill green" title="Compared with your previous import (${esc(relTime(prev.t))})">${svg.up} Since ${esc(relTime(prev.t))}: ${delta.tl > 0 ? `+${delta.tl} levels · ` : ''}${fmtGp(delta.xp)} xp · ${fmtGp(delta.gp + delta.bank, { sign: true })} worth</span>` : ''}
       </div>
     </div>
-    <div class="stats stagger">
+    <div class="stats stagger ${state.explorer ? 'four' : ''}">
       <button class="panel stat hero" data-go="money"><div class="label">${img(skillIcon(best?.m.s) || g.currencies.GoldPieces, '', 16)}Best right now</div><div class="value num" data-count="${best ? Math.round(best.gph) : 0}">${best ? fmtGp(best.gph) : '—'}</div><div class="sub">${best ? `gp/hr · ${esc(best.m.n)}` : 'nothing unlocked yet'}</div></button>
       ${state.explorer ? explorerTiles() : `
       <div class="panel stat"><div class="label">${img(g.currencies.GoldPieces, '', 16)}Gold</div><div class="value num" data-count="${s.wallet?.GoldPieces ?? s.header.gp ?? 0}">${fmtGp(s.wallet?.GoldPieces ?? s.header.gp ?? 0)}</div><div class="sub">in your wallet</div></div>
       <button class="panel stat" data-go="bank"><div class="label">${img(g.skills.Bank?.i, '', 16)}Bank value</div><div class="value num" data-count="${Math.round(bv.total)}">${fmtGp(bv.total)}</div><div class="sub">${fmtNum(bv.rows.length)} stacks if sold now</div></button>
-      <button class="panel stat" data-go="upgrades"><div class="label">${img(g.skills._Shop?.i, '', 16)}Next upgrade</div>${adv ? `<div class="value small">${esc(adv.s.n)}</div><div class="sub">+${fmtGp(adv.dGp)} gp/hr · pays back in ${fmtDuration(adv.payback)}</div>` : `<div class="value small">All caught up</div><div class="sub">No profitable upgrade in reach</div>`}</button>`}
+`}
     </div>
   </section>
   <div class="skills-strip">
@@ -338,11 +347,11 @@ function renderDashboard() {
       return `<button class="skill-chip" data-train="${esc(k)}" title="${esc(k)} · ${fmtNum(v.xp)} xp · open in Training">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}${d > 0 ? `<em class="up">+${d}</em>` : ''}</div><div class="nm">${esc(k)}</div></div><span class="bar" style="width:${pct}%"></span></button>`;
     }).join('')}
     ${others.length ? `<span class="strip-sep"></span>` + others.map(([k, v]) => `<span class="skill-chip dim" title="${esc(k)} · not modelled yet">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}</div><div class="nm">${esc(k)}</div></div></span>`).join('') : ''}
-  </div>
-  <div id="view"></div>`;
-
-  countUp(app);
-  const cs = $('#copy-sum');
+  </div>`;
+  app.innerHTML = '<div id="head"></div><div id="view"></div>';
+  state.bindHead = (root) => {
+  countUp(root);
+  const cs = $('#copy-sum', root);
   if (cs) cs.onclick = async () => {
     const top = e.ranked('best')[0], scratch = e.ranked('chain')[0], afk = e.ranked('afk', { window: 8 })[0];
     const lines = [
@@ -355,19 +364,24 @@ function renderDashboard() {
     ].filter(Boolean);
     try { await navigator.clipboard.writeText(lines.join('\n')); toast('Summary copied'); } catch { toast('Could not copy to the clipboard'); }
   };
-  const sc = $('#share-card');
+  const sc = $('#share-card', root);
   if (sc) sc.onclick = () => openCard();
+  root.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => go(b.dataset.go)));
+  root.querySelectorAll('[data-train]').forEach((b) => (b.onclick = () => { state.trainSkill = b.dataset.train; state.trainTarget = null; state.trainLevel = null; go('train'); }));
+  };
   tabsEl.onclick = (ev) => {
     const b = ev.target.closest('[data-tab]');
     if (!b) return;
     go(b.dataset.tab);
   };
-  app.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => go(b.dataset.go)));
-  app.querySelectorAll('[data-train]').forEach((b) => (b.onclick = () => { state.trainSkill = b.dataset.train; state.trainTarget = null; state.trainLevel = null; go('train'); }));
   renderView();
 }
 
 function go(tab) {
+  if (tab === 'upgrades') { tab = 'plan'; state.planView = 'upgrades'; }
+  else if (tab === 'plan' && state.tab !== 'plan') state.planView = 'route';
+  if (tab === 'unlocks') tab = 'overview';
+  if (tab === 'bank' && !['use', 'process', 'collection', 'all'].includes(state.bankView)) state.bankView = 'use';
   state.tab = tab; savePrefs();
   tabsEl.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', t.dataset.tab === state.tab));
   renderView();
@@ -388,7 +402,11 @@ function renderView() {
   const v = $('#view');
   if (!v) return;
   setHash();
-  const views = { plan: viewPlan, money: viewMoney, train: viewTrain, quests: viewQuests, farm: viewFarm, items: viewItems, upgrades: viewUpgrades, bank: viewBank, unlocks: viewUnlocks };
+  // the full profile header lives on Overview; other tabs get a slim bar
+  const head = $('#head');
+  const mode = state.explorer || state.tab === 'overview' ? 'full' : 'slim';
+  if (head && head.dataset.mode !== mode) { head.innerHTML = mode === 'full' ? state.headFull : state.headSlim; head.dataset.mode = mode; state.bindHead?.(head); }
+  const views = { overview: viewOverview, plan: viewPlan, money: viewMoney, train: viewTrain, quests: viewQuests, farm: viewFarm, items: viewItems, upgrades: viewUpgrades, bank: viewBank, unlocks: viewUnlocks };
   v.innerHTML = `<div class="view fade-in">${(views[state.tab] || viewMoney)()}</div>`;
   bindView(v);
 }
@@ -474,7 +492,7 @@ function reachBanner() {
 function emptyMoney() {
   if (state.q || state.skill) return `<div class="empty"><b>No matches.</b>Try a different skill or clear the search.</div>`;
   if (state.mode === 'bank') return `<div class="empty"><b>Nothing in your bank can be processed for profit right now.</b>Try <button class="linkish" data-mode="chain">From scratch</button> to see what to gather.</div>`;
-  return `<div class="empty"><b>Nothing profitable is unlocked yet.</b>Check <button class="linkish" data-gotab="unlocks">Next unlocks</button> for what opens up soon.</div>`;
+  return `<div class="empty"><b>Nothing profitable is unlocked yet.</b>The <button class="linkish" data-gotab="overview">Overview</button> shows which levels open the most.</div>`;
 }
 
 function srcTag(x) {
@@ -849,7 +867,7 @@ function viewTrain() {
         <div class="panel stat"><div class="label">${img(g.currencies.GoldPieces, '', 16)}Gold along the way</div><div class="value num ${plan.gp < 0 ? 'red' : 'gold'}">${fmtGp(plan.gp, { sign: true })}</div><div class="sub">${plan.gp < 0 ? 'cost of supplies, net of what you make' : 'from selling what you make'}</div></div>
         <div class="panel stat"><div class="label">${svg.target}Methods</div><div class="value num">${plan.segs.length}</div><div class="sub">${plan.segs.length > 1 ? 'switch as new ones unlock' : 'one method all the way'}</div></div>
       </div>
-      ${plan.stuck ? `<div class="note">${svg.info}<span>${COMBAT_SKILLS.includes(sk) ? `None of the gear you own can train ${sk} on an enemy you can safely farm.${sk === 'Ranged' ? ' You need a ranged weapon and matching ammo.' : sk === 'Magic' ? ' You need a staff or wand and a spell you can cast (with its runes).' : sk === 'Defence' ? ' Defence comes from the Block stance (swords and daggers) or the Long Range and Defensive stances.' : ''} Gear in your bank counts, not just what you have equipped.` : `Nothing you can train is unlocked at level ${plan.stuck}. Check the requirements in Money makers.`}</span></div>` : ''}
+      ${plan.stuck ? `<div class="note">${svg.info}<span>${COMBAT_SKILLS.includes(sk) ? `None of the gear you own can train ${sk} on an enemy you can safely farm.${sk === 'Ranged' ? ' You need a ranged weapon and matching ammo.' : sk === 'Magic' ? ' You need a staff or wand and a spell you can cast (with its runes).' : sk === 'Defence' ? ' Defence comes from the Block stance (swords and daggers) or the Long Range and Defensive stances.' : ''} Gear in your bank counts, not just what you have equipped.` : `Nothing you can train is unlocked at level ${plan.stuck}. Check the requirements in Money.`}</span></div>` : ''}
       <div class="panel plan">
         <h4>Route</h4>
         ${plan.segs.map((x) => `
@@ -990,7 +1008,7 @@ function goalView() {
   const r = e.goalRoute(g);
   const step = (st, i) => {
     const k = KIND[st.kind] || KIND.unlock;
-    const icon = st.kind === 'train' || st.kind === 'guild' ? skillIcon(st.skill) : st.kind === 'quest' ? G().skills.Quests?.i : st.kind === 'unlock' || st.kind === 'make' ? (st.m.i || itemIcon(st.item)) : st.kind === 'kill' ? G().combat.enemies[st.enemy]?.i : st.kind === 'buy' || st.kind === 'have' ? itemIcon(st.items?.[0]?.[0]) : st.id === 'gold' ? G().currencies.GoldPieces : G().shop[st.id.slice(2)]?.i;
+    const icon = st.kind === 'train' || st.kind === 'guild' ? skillIcon(st.skill) : st.kind === 'quest' ? G().skills.Quests?.i : st.kind === 'unlock' || st.kind === 'make' ? (st.m.i || itemIcon(st.item)) : st.kind === 'kill' ? G().combat.enemies[st.enemy]?.i : st.kind === 'buy' || st.kind === 'have' ? itemIcon(st.items?.[0]?.[0]) : st.id === 'gold' ? G().currencies.GoldPieces : (G().shop[st.id.slice(2)]?.i || skillIcon(st.skill) || G().skills._Shop?.i);
     const target = st.kind === 'kill' ? 'data-gotab="money"' : st.kind === 'make' ? `data-item="${esc(st.item || '')}"` : st.kind === 'buy' || st.kind === 'have' ? `data-item="${esc(st.items?.[0]?.[0] || '')}"` : st.kind === 'train' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${st.level}"` : st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'guild' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${e.level(st.skill) + 1}"` : st.kind === 'shop' ? 'data-gotab="upgrades"' : `data-item="${esc(st.m?.primary || '')}"`;
     return `<li class="ps ${k.cls}"><span class="ps-n num">${i + 1}</span>
       <div class="ps-card panel" role="button" tabindex="0" ${target}>
@@ -1058,7 +1076,16 @@ function paceSection() {
   ${rows.length ? `<div class="pace-list">${rows.slice(0, 12).map((r) => `<div class="pace-row">${img(skillIcon(r.k), '', 20)}<b>${esc(r.k)}</b><span class="num">${fmtGp(r.perDay)} xp/day</span><span class="muted">${r.next ? `${r.next} in ${Number.isFinite(r.eta) ? fmtDuration(r.eta * 24) : '—'}` : 'maxed'}</span></div>`).join('')}</div>` : ''}`;
 }
 
+function planSwitch() {
+  return `<div class="seg plan-switch" role="tablist"><button data-planview="route" aria-pressed="${state.planView !== 'upgrades'}">Route &amp; goals</button><button data-planview="upgrades" aria-pressed="${state.planView === 'upgrades'}">Upgrades to buy</button></div>`;
+}
+
 function viewPlan() {
+  if (state.planView === 'upgrades') return planSwitch() + viewUpgrades();
+  return planSwitch() + viewRoute();
+}
+
+function viewRoute() {
   const e = E();
   const plan = e.speedPlan({ horizon: state.horizon, maxSteps: state.horizon > 100 ? 22 : 16 });
   const bankXp = new Map(e.leftovers().skills.map((x) => [x.skill, x]));
@@ -1074,7 +1101,7 @@ function viewPlan() {
     for (const k of st.kills || []) pre.push(`<span class="pre">${img(G().combat.enemies[k.enemy]?.i, '', 14)}Kill ${fmtNum(k.left)} ${esc(k.name)}<span class="muted"> · ${fmtDuration(k.hours)}${k.style ? ' ' + esc(k.style.toLowerCase()) : ''}</span></span>`);
     if (st.earn > 0.005) pre.push(`<span class="pre">${img(G().currencies.GoldPieces, '', 14)}Save up ${fmtGp(st.gp)} gold<span class="muted"> · ${fmtDuration(st.earn)} of ${esc(plan.steps[i - 1]?.bestName || plan.startName)}</span></span>`);
     if (st.items?.length) pre.push(...st.items.filter(([it, q]) => (e.bank[it] || 0) < q).map(([it, q]) => `<span class="pre" data-item="${esc(it)}">${img(itemIcon(it), '', 14)}Get ${fmtNum(q - (e.bank[it] || 0))} ${esc(e.name(it))}</span>`));
-    const icon = st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'quest' ? G().skills.Quests?.i || G().skills.CompletionLog?.i : st.kind === 'gear' ? itemIcon(st.id.slice(2)) : st.kind === 'astro' ? G().astro.cons.find((c) => c.id === st.cons)?.i : G().shop[st.id.slice(2)]?.i;
+    const icon = st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'quest' ? G().skills.Quests?.i || G().skills.CompletionLog?.i : st.kind === 'gear' ? itemIcon(st.id.slice(2)) : st.kind === 'astro' ? G().astro.cons.find((c) => c.id === st.cons)?.i : (G().shop[st.id.slice(2)]?.i || skillIcon(st.skill) || G().skills._Shop?.i);
     const target = st.kind === 'astro' ? `data-tskill-go="Astrology" data-target-go="${E().level('Astrology') + 1}"` : st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'unlock' ? `data-tskill-go="${esc(st.needs[0]?.skill || st.m.s)}" data-target-go="${st.needs[0]?.level || st.m.lv}"` : st.kind === 'gear' ? `data-item="${esc(st.id.slice(2))}"` : 'data-gotab="upgrades"';
     return `<li class="ps ${k.cls}">
       <span class="ps-n num">${i + 1}</span>
@@ -1088,7 +1115,7 @@ function viewPlan() {
   const goalMode = state.goal && state.goal.type !== 'gold';
   if (goalMode) {
     return `<div class="section-head"><div><h2>Your route</h2><p>Everything your goal depends on, in order: earlier quests, the training each step needs (levels carry forward), guild ranks and gold. Upgrades are added on the way when they save more time than they cost.</p></div></div>
-    ${goalPicker()}${goalView()}${paceSection()}`;
+    ${goalPicker()}${goalView()}`;
   }
   return `
   ${goalPicker()}
@@ -1101,8 +1128,70 @@ function viewPlan() {
     <div class="ph-chart">${plan.steps.length ? rateChart(plan) : ''}</div>
   </div>
   ${plan.steps.length ? `<ol class="psteps stagger">${plan.steps.map(step).join('')}</ol>` : `<div class="empty"><b>Nothing to plan yet.</b>No upgrade, unlock or quest pays back within this horizon.</div>`}
-  ${paceSection()}
   <p class="muted plan-note">Between steps, keep running your best money maker. Times are estimates at your current rates. Quests with parts the site can't model yet (agility, astrology, dungeons) are marked, and those parts aren't counted in their time.</p>`;
+}
+
+// ---------------------------------------------------------------- overview
+const listWords = (a) => (a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1]);
+
+function viewOverview() {
+  const e = E(), g = G();
+  const r = e.accountRead();
+  const cl = r.styles;
+  const lowStyles = Object.entries(cl).filter(([k, v]) => k !== r.mainStyle && v < 10).map(([k]) => k);
+  const strong = r.top.map((x) => `${x.skill} ${x.level}`);
+  const weak = r.lowest.filter((x) => x.level <= 5).map((x) => x.skill);
+  const plan = e.speedPlan({ horizon: 96, maxSteps: 6 });
+  const kindLabel = { unlock: 'Unlock', shop: 'Upgrade', gear: 'Gear', quest: 'Quest', astro: 'Astrology' };
+  const stepIcon = (st) => (st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'quest' ? g.skills.Quests?.i : st.kind === 'gear' ? itemIcon(st.id.slice(2)) : st.kind === 'astro' ? g.astro.cons.find((c) => c.id === st.cons)?.i : g.shop[st.id.slice(2)]?.i || skillIcon(st.skill) || g.skills._Shop?.i);
+  const alertIcon = { astro: skillIcon('Astrology'), farm: skillIcon('Farming'), shop: g.skills._Shop?.i, quest: g.skills.Quests?.i, slayer: skillIcon('Slayer'), bank: g.skills.Bank?.i };
+  const alertTarget = (a) => (a.kind === 'astro' ? 'data-tskill-go="Astrology" data-target-go="' + (e.level('Astrology') + 1) + '"' : a.kind === 'quest' ? `data-quest-go="${esc(a.id)}"` : a.kind === 'slayer' ? `data-ready-go="${esc(a.enemy)}"` : a.kind === 'shop' ? 'data-gotab="upgrades"' : `data-gotab="${esc(a.go)}"`);
+  const opens = (gt) => {
+    const names = gt.opened.filter((t) => t.kind !== 'recipe');
+    const recipes = gt.opened.filter((t) => t.kind === 'recipe').length;
+    const label = { quest: 'quest', area: 'area', dungeon: 'dungeon', money: 'better money', plot: 'farm plot', shop: 'upgrade', gear: 'wear your' };
+    const chips = names.slice(0, 4).map((t) => `<span class="ov-chip k-${t.kind}">${t.kind === 'gear' ? 'wear ' : ''}${esc(t.name)}<small>${t.kind === 'gear' ? '' : label[t.kind]}${t.gph ? ' · ' + fmtGp(t.gph) + '/hr' : ''}</small></span>`);
+    if (names.length > 4) chips.push(`<span class="ov-chip">+${names.length - 4} more</span>`);
+    if (recipes) chips.push(`<span class="ov-chip">${recipes} new recipe${recipes === 1 ? '' : 's'}</span>`);
+    return chips.join('');
+  };
+  return `
+  <section class="panel ov-read">
+    <span class="eyebrow">Your account at a glance</span>
+    <p class="ov-lead"><b>${esc(r.stage)}</b> · ${Math.round(r.pct * 100)}% of the way to 99 everywhere · ${r.qDone} of ${r.qTotal} quests done</p>
+    <p class="ov-text">You fight with <b>${r.mainStyle}</b> (${r.mainStyle === 'Melee' ? `Attack ${e.level('Attack')}, Strength ${e.level('Strength')}` : `${r.mainStyle} ${cl[r.mainStyle]}`}, Defence ${e.level('Defence')})${lowStyles.length ? `; ${listWords(lowStyles)} ${lowStyles.length === 1 ? 'is' : 'are'} untrained` : ''}.
+      Your strongest skills are ${listWords(strong)}${weak.length ? `, while ${listWords(weak)} ${weak.length === 1 ? 'is' : 'are'} barely started` : ''}.
+      ${r.best ? `Right now <b>${esc(r.best.m.n)}</b> pays the most (<b class="gold">${fmtGp(r.best.gph)}/hr</b>${r.best.src === 'bank' ? ', from your bank' : ''})` : ''}${r.afk ? `; left alone for 8 hours, ${esc(r.afk.m.n)} makes ${fmtGp(r.afk.total)}` : ''}${r.farmGph > 0 ? `; your farm adds ${fmtGp(r.farmGph)}/hr on top` : ''}.</p>
+  </section>
+
+  ${r.alerts.length ? `<section class="ov-sec"><h3>Right now</h3><div class="ov-alerts">${r.alerts.map((a) => `<button class="ov-alert" ${alertTarget(a)}>${img(alertIcon[a.kind], '', 22)}<span>${esc(a.text)}</span>${svg.arrow || '→'}</button>`).join('')}</div></section>` : ''}
+
+  <section class="ov-sec">
+    <div class="ov-h"><h3>Do this next</h3><button class="linkish" data-gotab="plan">Full route →</button></div>
+    ${plan.steps.length ? `<div class="ov-steps">${plan.steps.slice(0, 3).map((st, i) => `<button class="panel ov-step" data-gotab="plan">
+      <span class="ov-n num">${i + 1}</span>${img(stepIcon(st), '', 30)}
+      <span class="ov-main"><small>${kindLabel[st.kind] || 'Step'}</small><b>${esc(st.title)}</b><span class="muted">${esc(st.why || '')}</span></span>
+      <span class="ov-side"><b class="num">${fmtDuration(st.hours)}</b>${st.rateAfter > st.rateBefore + 1 ? `<small class="green">${fmtGp(st.rateBefore)} → ${fmtGp(st.rateAfter)}/hr</small>` : ''}</span>
+    </button>`).join('')}</div>` : '<div class="empty">Nothing pays back within a few days. Keep running your best money maker.</div>'}
+  </section>
+
+  <div class="ov-two">
+    <section class="panel ov-box">
+      <h4>Levels that open the most</h4>
+      <p class="muted ov-sub">The cheapest levels to reach for what they open: quests, areas, better money makers, plots, upgrades, and gear you already own but can't wear.</p>
+      ${r.gates.length ? r.gates.map((gt) => `<div class="ov-gate" role="button" tabindex="0" data-tskill-go="${esc(gt.skill)}" data-target-go="${gt.level}">
+        <div class="ov-gh">${img(skillIcon(gt.skill), '', 22)}<b>${esc(gt.skill)} ${gt.from} → ${gt.level}</b><span class="num muted">${fmtDuration(gt.hours)}</span></div>
+        <div class="ov-chips">${opens(gt)}</div></div>`).join('') : '<div class="muted">Nothing big is a few levels away.</div>'}
+    </section>
+    <section class="panel ov-box">
+      <h4>Your quests are waiting on</h4>
+      <p class="muted ov-sub">Skills the quests you haven't finished need. These are the ones holding your story back.</p>
+      ${r.questWait.length ? r.questWait.map((w) => `<div class="ov-gate" role="button" tabindex="0" data-tskill-go="${esc(w.skill)}" data-target-go="${w.first}">
+        <div class="ov-gh">${img(skillIcon(w.skill), '', 22)}<b>${esc(w.skill)} <span class="muted">(${e.level(w.skill)})</span></b><span class="num muted">${w.first === w.level ? `needs ${w.level}` : `${w.first} → ${w.level}`}</span></div>
+        <div class="ov-chips">${w.quests.slice(0, 4).map((q) => `<span class="ov-chip k-quest">${esc(q)}</span>`).join('')}${w.quests.length > 4 ? `<span class="ov-chip">+${w.quests.length - 4} more</span>` : ''}</div></div>`).join('') : '<div class="muted">No quest is waiting on a level.</div>'}
+    </section>
+  </div>
+  ${paceSection()}`;
 }
 
 // ---------------------------------------------------------------- quests
@@ -1586,9 +1675,10 @@ function viewFarm() {
 
 // ---------------------------------------------------------------- bank
 function viewBank() {
-  const sub = `<div class="seg bank-switch" role="tablist"><button data-bankview="use" aria-pressed="${state.bankView === 'use'}">Put to use</button><button data-bankview="process" aria-pressed="${state.bankView === 'process'}">Process first</button><button data-bankview="sell" aria-pressed="${state.bankView === 'sell'}">Safe to sell</button><button data-bankview="collection" aria-pressed="${state.bankView === 'collection'}">Collection</button><button data-bankview="all" aria-pressed="${state.bankView === 'all'}">Everything</button></div>`;
+  const sub = `<div class="seg bank-switch" role="tablist"><button data-bankview="use" aria-pressed="${state.bankView === 'use'}">Put to use</button><button data-bankview="process" aria-pressed="${state.bankView === 'process' || state.bankView === 'sell'}">Process &amp; sell</button><button data-bankview="collection" aria-pressed="${state.bankView === 'collection'}">Collection</button><button data-bankview="all" aria-pressed="${state.bankView === 'all'}">Everything</button></div>`;
   if (state.bankView === 'use') return viewLeftovers(sub);
-  return state.bankView === 'all' ? viewBankAll(sub) : state.bankView === 'sell' ? viewSafeSell(sub) : state.bankView === 'collection' ? viewCollection(sub) : viewAlchemy(sub);
+  if (state.bankView === 'process' || state.bankView === 'sell') return viewAlchemy(sub) + viewSafeSell(null);
+  return state.bankView === 'all' ? viewBankAll(sub) : viewCollection(sub);
 }
 
 function viewLeftovers(sub) {
@@ -1671,7 +1761,7 @@ function viewSafeSell(sub) {
   rows.sort((a, b) => b.total - a.total);
   const total = rows.reduce((a, r) => a + r.total, 0);
   return `
-  <div class="section-head"><div><h2>Bank</h2><p>Stacks that no skill you have (or will have within 15 levels) uses, and no shop upgrade needs. Selling them frees ${fmtNum(rows.length)} bank slots for <b class="gold">${fmtGp(total)}</b>. Combat drops, quest items and anything for Hunting or Ranching aren't checked, so look before you sell those.</p></div>${sub}</div>
+  ${sub === null ? `<div class="section-sub" style="margin-top:28px"><h4>Safe to sell</h4><span class="muted" style="font-size:13px">Stacks nothing you can do (now or within 15 levels) uses and no shop upgrade needs: ${fmtNum(rows.length)} bank slots for <b class="gold">${fmtGp(total)}</b>. Combat drops and quest items aren't checked, so look before you sell those.</span></div>` : `<div class="section-head"><div><h2>Bank</h2><p>Stacks that no skill you have (or will have within 15 levels) uses, and no shop upgrade needs. Selling them frees ${fmtNum(rows.length)} bank slots for <b class="gold">${fmtGp(total)}</b>.</p></div>${sub}</div>`}
   ${rows.length ? `<div class="sell-list stagger">${rows.map((r) => `
     <button class="sell-row" data-item="${esc(r.it)}">
       ${img(itemIcon(r.it), '', 30)}
@@ -1894,7 +1984,7 @@ function openPalette() {
 function bindView(v) {
   v.onclick = (ev) => {
     const itemEl = ev.target.closest('[data-item]');
-    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-goaltype],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go],[data-db],[data-ready-go],#reach-go');
+    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-goaltype],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go],[data-db],[data-ready-go],#reach-go,[data-planview]');
     // Item icons open the item drawer, even inside a clickable row.
     if (itemEl?.dataset.item && (!t || (t !== itemEl && t.contains(itemEl)))) { ev.stopPropagation(); openItem(itemEl.dataset.item); return; }
     if (!t) return;
@@ -1946,6 +2036,7 @@ function bindView(v) {
     if (t.dataset.upfilter) { state.upFilter = t.dataset.upfilter; return rerender(); }
     if (t.dataset.gotab) return go(t.dataset.gotab);
     if (t.id === 'more') { state.limit += 30; return rerender(); }
+    if (t.dataset.planview) { state.planView = t.dataset.planview; return rerender(); }
     if (t.dataset.readyGo) { state.goal = { type: 'ready', id: t.dataset.readyGo }; savePrefs(); return go('plan'); }
     if (t.id === 'reach-go') { findReach(); return; }
     if (t.dataset.db) {
