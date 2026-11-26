@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=202611260434';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260434';
-import { drawCard } from './card.js?v=202611260434';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260434';
+import { decodeSave } from './save.js?v=202611260603';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260603';
+import { drawCard } from './card.js?v=202611260603';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260603';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -99,6 +99,7 @@ function setHash() {
 
 function applyPlayer() {
   state.planCache = new Map();
+  state.reach = null;
   E().setPlayer(state.save, { useMods: state.mods });
   state.base.setPlayer(state.save, { useMods: false });
 }
@@ -449,7 +450,7 @@ function viewMoney() {
     </div>
   </div>
   ${!state.explorer && (state.mode === 'best' || state.mode === 'chain') && !state.skill && !state.q ? reachBanner() : ''}
-  ${state.skill === 'Combat' ? fighterBanner() + slayerPanel() : ''}
+  ${state.skill === 'Combat' ? fighterBanner() + slayerPanel() + reachPanel() : ''}
   ${top ? topPick(top) : ''}
   <div class="list" id="list">
     ${rows.length ? rows.slice(0, state.limit).map((x, i) => methodRow(x, i, max)).join('') : emptyMoney()}
@@ -700,6 +701,41 @@ function dungeonFacts(r) {
   }).join('')}</div><div class="muted" style="font-size:12px;margin-top:6px">Each enemy uses its best loadout from your gear. Switching gear between waves is up to you.</div></div>`;
 }
 
+// fights you can't farm yet: what it takes (training + gear) and what they'd pay, computed on demand
+function reachPanel() {
+  if (state.explorer) return '';
+  const rows = state.reach?.rows || [];
+  const busy = state.reach && !state.reach.done;
+  return `<div class="panel reach-panel" id="reach">
+    <div class="sl-h">${svg.target}<b>Fights within reach</b><span class="muted">enemies you can't farm safely yet, and the training and gear that would change that</span>
+      ${state.reach ? '' : '<button class="btn btn-sm btn-gold" id="reach-go">Find them</button>'}</div>
+    ${rows.length ? `<div class="rch-list">${rows.map((x) => `<div class="rch-row ${x.rd?.reached && x.gph > 0 ? '' : 'far'}">${img(x.m.i, '', 30)}
+      <span class="rch-main"><b>${esc(x.m.n)}</b><small>${esc(x.m.loc || '')}${x.rd?.reached ? ' · ' + [...(x.area || []).map(([sk, l]) => `${sk} ${l} to enter`), ...x.rd.steps.map((s) => s.kind === 'train' ? `${s.skill} ${s.level}` : esc(E().name(s.id)))].join(', ') : x.rd ? ' · ' + esc(x.rd.why || 'out of reach') : ''}</small></span>
+      <span class="fm-v"><b class="num">${x.rd?.reached ? fmtDuration(x.rd.total + (x.areaHours || 0)) : '—'}</b><small>to get ready</small></span>
+      <span class="fm-v"><b class="num ${x.gph > 0 ? 'gold' : 'red'}">${x.rd?.reached ? fmtGp(x.gph) : '—'}</b><small>${x.rd?.reached && x.gph <= 0 ? 'eats more than it drops' : 'gp/hr then'}</small></span>
+      ${x.rd?.reached ? `<button class="btn btn-sm" data-ready-go="${esc(x.eid)}">Plan it</button>` : '<span></span>'}</div>`).join('')}</div>` : ''}
+    ${busy ? `<div class="muted" style="font-size:12px">Working through enemy ${rows.length + 1} of ${state.reach.todo.length + rows.length}…</div>` : ''}
+  </div>`;
+}
+
+function findReach() {
+  const e = E();
+  const todo = e.unsafeEnemies(8);
+  state.reach = { rows: [], todo, done: false };
+  const paint = () => { const el = $('#reach'); if (el) el.outerHTML = reachPanel(); };
+  paint();
+  const step = () => {
+    const x = state.reach.todo.shift();
+    if (!x) { const rank = (r) => (r.rd?.reached ? (r.gph > 0 ? 2 : 1) : 0); state.reach.done = true; state.reach.rows.sort((a, b) => rank(b) - rank(a) || b.gph - a.gph); paint(); return; }
+    let rd = null;
+    try { rd = e.readiness(x.eid); } catch { rd = null; }
+    state.reach.rows.push({ ...x, rd, gph: rd?.reached && rd.after ? e.readyGph(x.m, rd.after) : 0 });
+    paint();
+    setTimeout(step, 20);
+  };
+  setTimeout(step, 30);
+}
+
 function slayerPanel() {
   const e = E();
   const opts = e.slayerOptions();
@@ -712,7 +748,7 @@ function slayerPanel() {
       const en = C.enemies[o.task.enemy];
       const row = o.enemies.find((x) => x.eid === o.task.enemy);
       const left = Math.max(0, o.task.length - o.task.progress);
-      return `<div class="sl-task">${img(en?.i, '', 30)}<span><small>Current task · ${esc(o.sm.n)}</small><b>${esc(en?.n || o.task.enemy)} · ${o.task.progress}/${o.task.length}</b></span><span class="num">${row?.ok ? `~${fmtDuration(left / row.kph)} left` : '<span class="red">not safe with your gear: reroll</span>'}</span></div>`;
+      return `<div class="sl-task">${img(en?.i, '', 30)}<span><small>Current task · ${esc(o.sm.n)}</small><b>${esc(en?.n || o.task.enemy)} · ${o.task.progress}/${o.task.length}</b></span><span class="num">${row?.ok ? `~${fmtDuration(left / row.kph)} left` : `<span class="red">not safe with your gear</span> <button class="linkish" data-ready-go="${esc(o.task.enemy)}">how to get ready</button>`}</span></div>`;
     }).join('')}
     <div class="sl-grid">${opts.map((o) => `<div class="sl-m ${o.ok ? '' : 'locked'}">${img(o.sm.i, '', 28)}<span><b>${esc(o.sm.n)}</b><small>${o.ok ? `${o.viable}/${o.total} enemies farmable` : esc(o.reqs.filter((r) => !r.ok).map((r) => r.text).join(', '))}</small></span>
       <span class="sl-v"><b class="num">${o.coinsHr > 0 ? fmtGp(o.coinsHr) : '—'}</b><small>coins/hr</small></span><span class="sl-v"><b class="num">${o.xph > 0 ? fmtGp(o.xph) : '—'}</b><small>xp/hr</small></span><span class="sl-v"><b class="num ${o.gph < 0 ? 'red' : 'gold'}">${o.viable ? fmtGp(o.gph) : '—'}</b><small>gp/hr</small></span></div>`).join('')}</div>
@@ -938,10 +974,11 @@ function goalPicker() {
   for (const m of locked) { const k = m.s === 'Combat' ? 'Dungeons' : m.s; if (!bySkill.has(k)) bySkill.set(k, []); bySkill.get(k).push(m); }
   return `<div class="goal-pick panel">
     <span class="muted">Goal</span>
-    <div class="seg">${[['gold', 'Earn more gold'], ['quest', 'A quest'], ['level', 'A level'], ['unlock', 'An unlock'], ['item', 'An item']].map(([k, l]) => `<button data-goaltype="${k}" aria-pressed="${g.type === k}">${l}</button>`).join('')}</div>
+    <div class="seg">${[['gold', 'Earn more gold'], ['quest', 'A quest'], ['level', 'A level'], ['unlock', 'An unlock'], ['item', 'An item'], ['ready', 'A fight']].map(([k, l]) => `<button data-goaltype="${k}" aria-pressed="${g.type === k}">${l}</button>`).join('')}</div>
     ${g.type === 'quest' ? `<select id="goal-quest">${quests.map((q) => `<option value="${esc(q.id)}" ${g.id === q.id ? 'selected' : ''}>${esc(q.Q.n)} (${esc(q.Q.cat)})</option>`).join('')}</select>` : ''}
     ${g.type === 'level' ? `<select id="goal-skill">${skills.map((k) => `<option ${g.skill === k ? 'selected' : ''}>${k}</option>`).join('')}</select><label class="lvl-in"><input type="number" id="goal-level" min="2" max="99" value="${g.level || Math.min(99, e.level(g.skill || skills[0]) + 10)}"/></label>` : ''}
     ${g.type === 'item' ? `<input id="goal-item" list="goal-items" placeholder="Type an item, e.g. Rune Platebody" value="${esc(g.id ? E().name(g.id) : '')}" autocomplete="off"/><datalist id="goal-items">${Object.values(G().items).map((it) => `<option value="${esc(it.n)}"></option>`).join('')}</datalist><label class="lvl-in"><span class="sr">Quantity</span><input type="number" id="goal-qty" min="1" value="${g.qty || 1}"/></label>` : ''}
+    ${g.type === 'ready' ? `<select id="goal-ready">${Object.entries(G().combat.enemies).filter(([id]) => E().byId.get('Combat:' + id) && !E().byId.get('Combat:' + id).quest).sort((a, b) => a[1].n.localeCompare(b[1].n)).map(([id, en]) => `<option value="${esc(id)}" ${g.id === id ? 'selected' : ''}>${esc(en.n)}</option>`).join('')}</select>` : ''}
     ${g.type === 'unlock' ? `<select id="goal-unlock">${[...bySkill.entries()].map(([sk, ms]) => `<optgroup label="${esc(sk)}">${ms.map((m) => `<option value="${esc(m.id)}" ${g.id === m.id ? 'selected' : ''}>${esc(m.n)}${m.s === 'Combat' ? '' : ` (lvl ${m.lv})`}</option>`).join('')}</optgroup>`).join('')}</select>` : ''}
   </div>`;
 }
@@ -1857,7 +1894,7 @@ function openPalette() {
 function bindView(v) {
   v.onclick = (ev) => {
     const itemEl = ev.target.closest('[data-item]');
-    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-goaltype],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go],[data-db]');
+    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-goaltype],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go],[data-db],[data-ready-go],#reach-go');
     // Item icons open the item drawer, even inside a clickable row.
     if (itemEl?.dataset.item && (!t || (t !== itemEl && t.contains(itemEl)))) { ev.stopPropagation(); openItem(itemEl.dataset.item); return; }
     if (!t) return;
@@ -1888,6 +1925,7 @@ function bindView(v) {
       else if (ty === 'quest') state.goal = { type: 'quest', id: e.questList().find((q) => !q.done && q.available)?.id || e.questList().find((q) => !q.done)?.id };
       else if (ty === 'level') { const sk = state.trainSkill && !NOT_TRAINABLE.has(state.trainSkill) ? state.trainSkill : 'Fishing'; state.goal = { type: 'level', skill: sk, level: Math.min(99, e.level(sk) + 10) }; }
       else if (ty === 'item') state.goal = { type: 'item', id: state.goal?.type === 'item' ? state.goal.id : null, qty: state.goal?.qty || 1 };
+      else if (ty === 'ready') state.goal = { type: 'ready', id: e.unsafeEnemies(1)[0]?.eid || 'GreenDragon' };
       else state.goal = { type: 'unlock', id: e.betterUnlocks().list[0]?.m.id || e.methods.find((m) => !m.quest && !e.status(m).unlocked)?.id };
       if (state.goal && !state.goal.id && ty !== 'level' && ty !== 'item') state.goal = null;
       savePrefs();
@@ -1908,6 +1946,8 @@ function bindView(v) {
     if (t.dataset.upfilter) { state.upFilter = t.dataset.upfilter; return rerender(); }
     if (t.dataset.gotab) return go(t.dataset.gotab);
     if (t.id === 'more') { state.limit += 30; return rerender(); }
+    if (t.dataset.readyGo) { state.goal = { type: 'ready', id: t.dataset.readyGo }; savePrefs(); return go('plan'); }
+    if (t.id === 'reach-go') { findReach(); return; }
     if (t.dataset.db) {
       const [k, v] = t.dataset.db.split(':');
       if (k === 'more') state.db.limit += 60;
@@ -1929,6 +1969,7 @@ function bindView(v) {
   if (mods) mods.onchange = () => { state.mods = mods.checked; savePrefs(); applyPlayer(); const y = scrollY; renderDashboard(); scrollTo({ top: y }); toast(state.mods ? 'Rates include your upgrades' : 'Showing base rates, without upgrades'); };
   const gq = $('#goal-quest', v); if (gq) gq.onchange = () => { state.goal = { type: 'quest', id: gq.value }; savePrefs(); rerender(); };
   const gu = $('#goal-unlock', v); if (gu) gu.onchange = () => { state.goal = { type: 'unlock', id: gu.value }; savePrefs(); rerender(); };
+  const gr = $('#goal-ready', v); if (gr) gr.onchange = () => { state.goal = { type: 'ready', id: gr.value }; savePrefs(); rerender(); };
   const gi = $('#goal-item', v), gqty = $('#goal-qty', v);
   if (gi) {
     const byName = new Map(Object.entries(G().items).map(([id, it]) => [it.n.toLowerCase(), id]));

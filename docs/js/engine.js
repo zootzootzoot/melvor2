@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611260434';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611260603';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -335,7 +335,7 @@ export class Engine {
       const lv = { ...this.levels, ...Object.fromEntries(need) };
       const per = this.goalPerHour(m, this.rate(m, lv), q);
       if (!(per > 0)) continue;
-      const train = [...need.entries()].map(([skill, level]) => ({ skill, level, hours: NOT_TRAINABLE.has(skill) ? Infinity : this.planLevel(skill, level).hours }));
+      const train = [...need.entries()].map(([skill, level]) => ({ skill, level, hours: NOT_TRAINABLE.has(skill) ? Infinity : this.trainHours(skill, level) }));
       const hours = train.reduce((a, t) => a + t.hours, 0) + left / per;
       if (Number.isFinite(hours) && (!best || hours < best.hours)) best = { hours, m, train };
     }
@@ -397,7 +397,7 @@ export class Engine {
       }
       steps.push({ ...st, tasks, done: stepDone });
     }
-    const training = [...trainNeed.entries()].map(([skill, level]) => ({ skill, level, hours: this.planLevel(skill, level).hours }));
+    const training = [...trainNeed.entries()].map(([skill, level]) => ({ skill, level, hours: this.trainHours(skill, level) }));
     for (const t of training) hours += t.hours;
     const rewardValue = Q.rw.items.reduce((a, [it, q]) => a + q * this.value(it), 0) + Q.rw.gp;
     return {
@@ -1155,7 +1155,7 @@ export class Engine {
     const planCache = new Map();
     const timeTo = (sk, lvl) => {
       const k = sk + lvl;
-      if (!planCache.has(k)) planCache.set(k, this.planLevel(sk, lvl).hours);
+      if (!planCache.has(k)) planCache.set(k, this.trainHours(sk, lvl));
       return planCache.get(k);
     };
     const out = [];
@@ -1398,6 +1398,40 @@ export class Engine {
    * that gets there soonest, using inputs from your bank first (no gathering time) and making the
    * rest from scratch, with XP from the intermediate steps counted.
    */
+  /**
+   * Hours of play from your current XP to a level, read off one cached plan to 99 (each segment's time spread
+   * evenly over its XP). Far cheaper than planning each target separately.
+   */
+  trainHours(skill, level) {
+    if (level <= this.level(skill)) return 0;
+    if (COMBAT_SKILLS.includes(skill)) {
+      // combat: your best few training enemies today, re-checked every 5 levels (cheap, slightly cautious)
+      const ck = 'ch|' + skill + '|' + level;
+      if (this._cache.has(ck)) return this._cache.get(ck);
+      const top = this.trainOptions(skill).slice(0, 3).map((o) => o.m.rid);
+      let xp = this.p.skills?.[skill]?.xp ?? 0, lvl = this.level(skill), h = 0;
+      while (lvl < level) {
+        const next = Math.min(level, lvl + 5);
+        const xph = Math.max(0, ...top.map((eid) => this.combatPlan(eid, 'xp:' + skill, { [skill]: lvl })?.xph || 0));
+        if (!(xph > 0)) { h = Infinity; break; }
+        h += Math.max(0, xpForLevel(next) - xp) / xph;
+        xp = Math.max(xp, xpForLevel(next)); lvl = next;
+      }
+      this._cache.set(ck, h);
+      return h;
+    }
+    const key = 'p99|' + skill;
+    let plan = this._cache.get(key);
+    if (!plan) { plan = this.planLevel(skill, 99); this._cache.set(key, plan); }
+    const target = xpForLevel(Math.min(99, level));
+    let xp = this.p.skills?.[skill]?.xp ?? 0, hours = 0;
+    for (const seg of plan.segs) {
+      if (target <= xp + seg.xp) return hours + (seg.xp > 0 ? seg.hours * (target - xp) / seg.xp : 0);
+      hours += seg.hours; xp += seg.xp;
+    }
+    return target <= xp ? hours : Infinity;
+  }
+
   planLevel(skill, target, { prefer = 'xp' } = {}) {
     const cur = this.p.skills?.[skill];
     let xp = cur?.xp ?? 0;
@@ -1661,14 +1695,21 @@ export class Engine {
    * per skill (and reduced by the XP the plan's own steps give), and production steps in the order they're needed.
    */
   acquire(target, qty = 1) {
-    const key = 'acq|' + target + '|' + qty;
+    const key = 'acq|' + target + '|' + qty + (this._noReady ? '|nr' : '');
     if (this._cache.has(key)) return this._cache.get(key);
+    this._busy ||= new Set();
+    if (this._busy.has(key)) return { item: target, qty, notes: ['circular'], missing: target, total: Infinity, steps: [], training: [], quests: [], kills: [], buys: [], used: [], shopNeed: [], gp: 0, earn: 0, readyFor: [], readyGear: [] };
+    this._busy.add(key);
+    try { return this._acquire(target, qty, key); } finally { this._busy.delete(key); }
+  }
+
+  _acquire(target, qty, key) {
     const best = Math.max(1, this.ranked('chain')[0]?.gph || 0);
     const HC = new Map();
     const H = (sk, lvl) => {
       if (NOT_TRAINABLE.has(sk) || lvl <= this.level(sk)) return 0;
       const k = sk + '|' + lvl;
-      if (!HC.has(k)) HC.set(k, this.planLevel(sk, lvl).hours);
+      if (!HC.has(k)) HC.set(k, this.trainHours(sk, lvl));
       return HC.get(k);
     };
     const QC = new Map();
@@ -1699,6 +1740,20 @@ export class Engine {
         RC.set(m.id, r && !r.blocked && r.ms > 0 ? r : null);
       }
       return RC.get(m.id);
+    };
+    const RR = new Map();
+    const readyRate = (m) => {
+      if (!RR.has(m.id)) {
+        let out = null;
+        const rd = m.x?.t === 'fight' ? this.readiness(m.x.e) : null;
+        if (rd?.reached && rd.after) {
+          const kph = HOUR / rd.after.killMs;
+          const food = this.food && this.items[this.food]?.heal ? this.food : null;
+          out = { rd, ms: 1, xp: 0, outs: m.out.map(([it, q]) => [it, q * kph]), ins: food && rd.after.takenPerKill > 0 ? [[food, (rd.after.takenPerKill / this.items[food].heal) * kph]] : [], extra: { food } };
+        }
+        RR.set(m.id, out);
+      }
+      return RR.get(m.id);
     };
     // food eaten in fights and thieving: when it has to be gathered, use whichever food costs the least time per HP healed
     const foods = Object.keys(this.items).filter((it) => this.items[it].heal > 0);
@@ -1766,6 +1821,20 @@ export class Engine {
         }
         opts.push({ kind: 'conv', c, h, n });
       }
+      if (!this._noReady && !opts.some((o) => Number.isFinite(o.h))) {
+        const blocked = (this.producers.get(item) || []).filter((m) => m.x?.t === 'fight' && !m.quest && !rateAt(m) && Number.isFinite(reqCost(m).h))
+          .sort((a, b) => (b.out.find(([i]) => i === item)?.[1] || 0) - (a.out.find(([i]) => i === item)?.[1] || 0)).slice(0, 2);
+        for (const m of blocked) {
+          const r = readyRate(m);
+          if (!r) continue;
+          const per = r.outs.find(([i]) => i === item)?.[1] || 0;
+          if (per <= 0) continue;
+          const hours = q / per;
+          let h = hours + reqCost(m).h + r.rd.total;
+          for (const [it, perIn] of insOf(r)) { const need = Math.max(0, perIn * hours - (this.bank[it] || 0)); if (need > 0) h += choose(it, need, stack).h; }
+          opts.push({ kind: 'make', m, h, perHour: per, hours, ready: r.rd });
+        }
+      }
       stack.delete(item);
       opts.sort((a, b) => a.h - b.h);
       const res = opts[0] || { h: Infinity };
@@ -1777,6 +1846,7 @@ export class Engine {
     const bank = { ...this.bank };
     const lvNeed = {}, quests = new Set(), kills = new Map(), shopNeed = new Set(), notes = new Set();
     const steps = new Map(); // method id -> { m, hours, items: Map(item -> qty), order }
+    const readyGear = new Set(), readyFor = new Set();
     const buys = new Map();
     const used = new Map();
     let order = 0, missing = null;
@@ -1797,8 +1867,15 @@ export class Engine {
         if (cv.kind === 'open') { const it = this.items[cv.in[0][0]]; const tot = it.open.table.reduce((a, r) => a + r[1], 0) || 1; for (const [x, w, lo, hi] of it.open.table) if (x !== item) bank[x] = (bank[x] || 0) + n * (w / tot) * (lo + hi) / 2; }
         return;
       }
-      const m = c.m, r = rateAt(m);
+      const m = c.m, r = c.ready ? readyRate(m) : rateAt(m);
       const hours = q / c.perHour;
+      if (c.ready) {
+        for (const s of c.ready.steps) {
+          if (s.kind === 'train') lvNeed[s.skill] = Math.max(lvNeed[s.skill] || 0, s.level);
+          else if (s.kind === 'gear' && !readyGear.has(s.id)) { readyGear.add(s.id); if (!(bank[s.id] > 0)) realize(s.id, 1, depth + 1); }
+        }
+        readyFor.add(m.id);
+      }
       for (const rq of m.r) {
         const st = this.reqStatus(rq);
         if (st.ok) continue;
@@ -1870,7 +1947,7 @@ export class Engine {
     const made = [...steps.values()].sort((a, b) => a.order - b.order);
     const activeH = made.reduce((a, s) => a + (s.m.k === 'passive' ? 0 : s.hours), 0);
     const total = training.reduce((a, t) => a + t.hours, 0) + questList.reduce((a, q) => a + q.hours, 0) + killList.reduce((a, k) => a + k.hours, 0) + activeH + earn;
-    const res = { item: target, qty: tq, have: this.bank[target] || 0, used: [...used], buys: [...buys], shopNeed: [...shopNeed], training, quests: questList, kills: killList, steps: made, gp, earn, total, notes: [...notes], missing, best, choice: choose(target, Math.max(1, tq - (this.bank[target] || 0)), new Set()) };
+    const res = { readyFor: [...readyFor], readyGear: [...readyGear], item: target, qty: tq, have: this.bank[target] || 0, used: [...used], buys: [...buys], shopNeed: [...shopNeed], training, quests: questList, kills: killList, steps: made, gp, earn, total, notes: [...notes], missing, best, choice: choose(target, Math.max(1, tq - (this.bank[target] || 0)), new Set()) };
     this._cache.set(key, res);
     return res;
   }
@@ -1934,6 +2011,178 @@ export class Engine {
     skills.sort((a, b) => (b.need > b.from) - (a.need > a.from) || b.saved - a.saved);
     const res = { keep: [...keep].map(([item, k]) => ({ item, qty: k.qty, have: this.bank[item] || 0, why: [...k.why] })), skills, need };
     this._cache.set('leftovers', res);
+    return res;
+  }
+
+  // ---------------------------------------------------------------- combat readiness
+  /** Enemies in areas you can enter that aren't safe to farm yet, richest loot first (candidates for readiness()). */
+  unsafeEnemies(limit = 8) {
+    const out = [];
+    // how strong an enemy is next to you: HP, Defence and its best attack level
+    const pl = combatLevels(this.p);
+    const strength = (lv) => ((lv.Hitpoints ?? 1) + (lv.Defence ?? 1) + Math.max(lv.Attack ?? 1, lv.Ranged ?? 1, lv.Magic ?? 1)) / 3;
+    const mine = strength(pl);
+    for (const m of this.methods) {
+      if (m.x?.t !== 'fight' || m.quest) continue;
+      const st = this.status(m);
+      if (!st.unlocked && st.missing.some((r) => r.kind !== 'lvl' || r.gap > 30)) continue;
+      const e = this.g.combat.enemies[m.x.e];
+      if (!e || strength(e.lv) > mine + 40) continue; // far beyond you: not "within reach"
+      if (this.combatPlan(m.x.e, 'money')) continue;
+      const loot = m.out.reduce((a, [it, q]) => a + q * this.value(it), 0) + (m.gp || 0);
+      const area = new Map();
+      for (const r of st.missing) if (r.kind === 'lvl') area.set(r.skill, Math.max(area.get(r.skill) || 0, r.need));
+      const areaHours = [...area].reduce((a, [sk, l]) => a + this.trainHours(sk, l), 0);
+      out.push({ m, eid: m.x.e, loot, perHp: loot / Math.max(10, (e.lv.Hitpoints ?? 1) * 10), missing: st.missing, area: [...area], areaHours });
+    }
+    return out.sort((a, b) => b.perHp - a.perHp).slice(0, limit);
+  }
+
+  /** gp/hr from an enemy once ready: loot per kill × kills per hour, minus the food you'd eat. */
+  readyGph(m, f) {
+    const loot = m.out.reduce((a, [it, q]) => a + q * this.value(it), 0) + (m.gp || 0);
+    const food = this.food && this.items[this.food]?.heal ? (f.takenPerKill / this.items[this.food].heal) * this.value(this.food) : 0;
+    return (HOUR / f.killMs) * (loot - food);
+  }
+
+  /**
+   * What it takes to farm an enemy you can't farm safely yet. A fight is viable when the enemy's worst hit stays under 90% of
+   * your HP and a kill takes under 20 minutes; "badness" is the larger of those two ratios (below 1 = viable).
+   * Greedy search over two kinds of moves: equipment you can get (made, bought or farmed, costed with acquire()),
+   * and +5 levels in a combat skill. Each step takes the move with the biggest drop in badness per hour of effort.
+   */
+  readiness(eid, { maxSteps = 18 } = {}) {
+    const key = 'ready|' + eid;
+    if (this._cache.has(key)) return this._cache.get(key);
+    // guard: readiness costs gear with acquire(), which may ask for readiness again
+    this._busy ||= new Set();
+    if (this._busy.has(key)) return null;
+    this._busy.add(key);
+    try { return this._readiness(eid, key, maxSteps); } finally { this._busy.delete(key); }
+  }
+
+  _readiness(eid, key, maxSteps) {
+    const C = this.g.combat;
+    const e = C?.enemies[eid];
+    if (!e || !this.gearPool) return null;
+    const enemy = enemyFighter(e);
+    const bad = (f) => (f ? Math.max(f.danger / 0.9, f.killMs / (20 * 60000)) : Infinity);
+    const score = (f) => -bad(f);
+    const start = Object.fromEntries(Object.entries(this.p.equipment || {}).map(([slot, x]) => [slot, x.item]));
+    const mFight = this.byId.get('Combat:' + eid);
+    const loot = (mFight?.out || []).reduce((a, [it, q]) => a + q * this.value(it), 0) + (mFight?.gp || 0);
+    const foodV = this.food && this.items[this.food]?.heal ? this.value(this.food) / this.items[this.food].heal : 0;
+    const gphOf = (f) => (HOUR / f.killMs) * (loot - f.takenPerKill * foodV);
+    const moneyScore = (f) => (bad(f) < 1 ? gphOf(f) : null);
+    // mode 'safe': value = −badness; mode 'money': value = gp/hr (only once viable)
+    const evalState = (gear, lvOv, mode = 'safe') => {
+      const ok = (id) => (this.items[id]?.eq?.r || []).every((q) => this.reqStatus(q, lvOv).ok);
+      const pool = gearPool(this.g, this.p, ok, [...this.extraGear, ...gear], (sp) => (sp.r || []).every((q) => this.reqStatus(q, lvOv).ok));
+      if (mode === 'money') {
+        const res = bestLoadout(this.g, pool, combatLevels(this.p, lvOv), enemy, moneyScore, start);
+        return res && res.ok !== false && res.f && bad(res.f) < 1 ? { b: bad(res.f), v: res.s, res } : { b: Infinity, v: -Infinity, res: null };
+      }
+      const res = bestLoadout(this.g, pool, combatLevels(this.p, lvOv), enemy, score, start);
+      return res ? { b: -res.s, v: res.s, res } : { b: Infinity, v: -Infinity, res: null };
+    };
+    const lvNow = combatLevels(this.p);
+    let lv = {};
+    const gear = [];
+    const cur = evalState(gear, lv);
+    const before = cur.res?.f || null;
+    if (cur.b < 1) { const r = { eid, safeNow: true, steps: [], total: 0, reached: true, before, after: before }; this._cache.set(key, r); return r; }
+    // gear candidates: per slot the strongest pieces you could get (sources exist), within 30 levels of yours
+    const owned = new Set([...Object.values(this.gearPool.byType).flat(), ...Object.values(this.gearPool.weapons).flat().filter(Boolean)]);
+    const defScore = (it) => { const st = it.eq.st; return Object.entries(st).filter(([k]) => /DefenceBonus$/.test(k)).reduce((a, [, v]) => a + v, 0) + it.eq.prot * 2 + (st.Armour || 0) * 4; };
+    const atkScore = (it) => weaponScoreOf(it);
+    const weaponScoreOf = (it) => { const st = it.eq.st; const acc = Math.max(0, ...Object.entries(st).filter(([k]) => /AttackBonus$/.test(k)).map(([, v]) => v)); const str = (st.MeleeStrengthBonus || 0) + (st.RangedStrengthBonus || 0) + (st.MagicDamageBonus || 0) * 100; return ((64 + acc) * (64 + str)) / (st.AttackInterval || 3000) + it.eq.pow; };
+    const hasSource = (id) => Number.isFinite(this.buyPrice(id)) || (this.producers.get(id) || []).some((m) => !m.quest) || (this.conversions.get(id) || []).length > 0;
+    const pool = Object.entries(this.items).filter(([id, it]) => it.eq && !owned.has(id) && it.eq.slot !== 'Ammo' && (it.eq.r || []).every((q) => q.t === 'lvl' || this.reqStatus(q).ok) && hasSource(id));
+    // per planned levels: per slot the strongest pieces within 25 levels of them
+    const candsFor = (lvx) => {
+      const bySlot = new Map();
+      for (const [id, it] of pool) {
+        if (!(it.eq.r || []).every((q) => q.t !== 'lvl' || q.l <= (lvx[q.s] ?? lvNow[q.s] ?? this.level(q.s)) + 25)) continue;
+        const k = it.eq.slot === 'Weapon' ? 'Weapon:' + (C.stances[(C.weapons[it.wp?.type] || [])[0]]?.style || 'Melee') : it.eq.slot;
+        if (!bySlot.has(k)) bySlot.set(k, []);
+        bySlot.get(k).push(id);
+      }
+      const out = [];
+      for (const [k, ids] of bySlot) out.push(...ids.sort((a, b) => (k.startsWith('Weapon') ? atkScore(this.items[b]) - atkScore(this.items[a]) : defScore(this.items[b]) - defScore(this.items[a]))).slice(0, 3));
+      return out;
+    };
+    const HC = new Map();
+    const H = (sk, l) => { if (l <= this.level(sk)) return 0; const k2 = sk + l; if (!HC.has(k2)) HC.set(k2, this.trainHours(sk, l)); return HC.get(k2); };
+    const AC = new Map();
+    // gear costs don't themselves get ready for other enemies (one level of readiness is plenty, and keeps it fast)
+    const gearCost = (id) => { if (!AC.has(id)) { this._noReady = (this._noReady || 0) + 1; let a; try { a = this.acquire(id, 1); } finally { this._noReady--; } AC.set(id, a.notes.length || a.missing ? Infinity : a.total); } return AC.get(id); };
+    const steps = [];
+    let state = cur;
+    const bestRate = Math.max(1, this.ranked('chain')[0]?.gph || 0);
+    let mode = 'safe', extra = 0;
+    for (let n = 0; n < maxSteps + 6; n++) {
+      if (mode === 'safe' && state.b < 1) {
+        // phase 2: now it's safe, keep improving gold/hr while each move pays back its time within ~20 h of farming
+        mode = 'money'; state = evalState(gear, lv, 'money');
+        if (!state.res) break;
+      }
+      if (mode === 'safe' && (n >= maxSteps || (n >= 4 && state.b > 2.5))) break; // far off and not closing in: stop and say why
+      if (mode === 'money' && ++extra > 6) break;
+      let pick = null;
+      // level moves
+      for (const sk of ['Defence', 'Hitpoints', 'Attack', 'Strength', 'Ranged', 'Magic']) {
+        const from = lv[sk] ?? lvNow[sk];
+        if (from >= 99) continue;
+        // several jump sizes, so plateaus (e.g. armour soaking every hit until max hit clears it) can be crossed
+        for (const jump of [5, 15, 40]) {
+          const to = Math.min(99, from + jump);
+          const h = H(sk, to) - H(sk, from);
+          if (!(h > 0)) continue;
+          const nlv = { ...lv, [sk]: to };
+          const s2 = evalState(gear, nlv, mode);
+          const gain = s2.v - state.v;
+          if (gain > 1e-4 && (!pick || gain / h > pick.eff)) pick = { kind: 'train', skill: sk, level: to, hours: h, eff: gain / h, gain, s2, lv: nlv };
+          if (to >= 99) break;
+        }
+      }
+      // gear moves (with the levels the piece needs)
+      for (const id of candsFor(lv)) {
+        if (gear.includes(id)) continue;
+        const nlv = { ...lv };
+        let h = 0;
+        for (const q of this.items[id].eq.r || []) if (q.t === 'lvl' && (nlv[q.s] ?? lvNow[q.s] ?? this.level(q.s)) < q.l) { h += H(q.s, q.l) - H(q.s, nlv[q.s] ?? lvNow[q.s] ?? this.level(q.s)); nlv[q.s] = q.l; }
+        const s2 = evalState([...gear, id], nlv, mode);
+        if (!s2.res || !Object.values(s2.res.gear).includes(id)) continue;
+        const gain = s2.v - state.v;
+        if (!(gain > 1e-4)) continue;
+        const cost = gearCost(id);
+        if (!Number.isFinite(cost)) continue;
+        const total = h + Math.max(cost, 1 / 60);
+        if (!pick || gain / total > pick.eff) pick = { kind: 'gear', id, hours: cost, train: h, eff: gain / total, gain, total, s2, lv: nlv };
+      }
+      if (!pick) break;
+      if (mode === 'money' && pick.gain * 20 < (pick.total ?? pick.hours) * bestRate) break; // not worth the time
+      if (pick.kind === 'gear') {
+        for (const q of this.items[pick.id].eq.r || []) if (q.t === 'lvl' && (lv[q.s] ?? lvNow[q.s]) < q.l) steps.push({ kind: 'train', skill: q.s, level: q.l, hours: H(q.s, q.l) - H(q.s, lv[q.s] ?? lvNow[q.s]), for: pick.id });
+        gear.push(pick.id);
+        steps.push({ kind: 'gear', id: pick.id, hours: pick.hours });
+      } else steps.push({ kind: 'train', skill: pick.skill, level: pick.level, hours: pick.hours });
+      lv = pick.lv; state = pick.s2;
+    }
+    // merge training per skill (keep the highest level; hours from your current level)
+    const train = new Map();
+    for (const s of steps) if (s.kind === 'train') train.set(s.skill, Math.max(train.get(s.skill) || 0, s.level));
+    const out = [...[...train].map(([skill, level]) => ({ kind: 'train', skill, level, from: this.level(skill), hours: H(skill, level) })), ...steps.filter((s) => s.kind === 'gear')];
+    const after = state.res?.f || null;
+    let why = '';
+    if (state.b >= 1) {
+      if (after && after.dmg <= 1.5) why = `its armour${e.st.Armour ? ` (${e.st.Armour})` : ''} and damage resistance soak your hits; you need a weapon or spell with much more power`;
+      else if (after && after.danger >= 0.9) why = `it can still hit for ${Math.round(after.danger * 100)}% of your HP; you need more Hitpoints and defensive gear than you can get yet`;
+      else if (after) why = `a kill would still take ${fmtDuration(after.killMs / HOUR)}`;
+      else why = 'none of the gear you can get works against it';
+    }
+    const res = { eid, safeNow: false, steps: state.b < 1 ? out : [], gear, lv, total: out.reduce((a, s) => a + s.hours, 0), reached: state.b < 1, before, after, loadout: state.res, why };
+    this._cache.set(key, res);
     return res;
   }
 
@@ -2166,7 +2415,7 @@ export class Engine {
     const H = (sk, lvl) => { // hours from your save's level to lvl (0 if already there)
       if (lvl <= (this.levels[sk] ?? 1) || NOT_TRAINABLE.has(sk)) return 0;
       const k = sk + lvl;
-      if (!hCache.has(k)) hCache.set(k, this.planLevel(sk, lvl).hours);
+      if (!hCache.has(k)) hCache.set(k, this.trainHours(sk, lvl));
       return hCache.get(k);
     };
     const trainCost = (needs) => needs.reduce((a, n) => a + Math.max(0, H(n.skill, n.level) - H(n.skill, lvNow[n.skill] ?? 1)), 0);
@@ -2284,6 +2533,7 @@ export class Engine {
     const key = 'goal|' + JSON.stringify(goal);
     if (this._cache.has(key)) return this._cache.get(key);
     const steps = [];
+    let notes = [];
     const lvNow = { ...this.levels };
     const best = this.ranked('chain')[0]?.gph || 0;
     let gold = this.p.wallet?.GoldPieces ?? this.p.header?.gp ?? 0;
@@ -2291,7 +2541,7 @@ export class Engine {
     const H = (sk, lvl) => {
       if (lvl <= (this.levels[sk] ?? 1) || NOT_TRAINABLE.has(sk)) return 0;
       const k = sk + lvl;
-      if (!hCache.has(k)) hCache.set(k, this.planLevel(sk, lvl).hours);
+      if (!hCache.has(k)) hCache.set(k, this.trainHours(sk, lvl));
       return hCache.get(k);
     };
     const train = (sk, lvl, why) => {
@@ -2326,8 +2576,40 @@ export class Engine {
         why: [q.rewardValue > 0 ? `rewards worth ${Math.round(q.rewardValue).toLocaleString('en-US')} gold` : '', q.unlocks.filter((u) => u[0] === 'shop' || u[0] === 'area').map((u) => 'unlocks ' + u[2]).join(', ')].filter(Boolean).join(' · ') });
       gold += q.rewardValue;
     };
+    // get ready to fight an enemy you can't farm safely yet: its training joins the route, gear is resolved with acquire()
+    const getReady = (eid) => {
+      const rd = this.readiness(eid);
+      const name = this.g.combat.enemies[eid]?.n || eid;
+      if (!rd || !rd.reached) return rd;
+      for (const s of rd.steps) if (s.kind === 'train') train(s.skill, s.level, `to fight ${name} safely`);
+      for (const s of rd.steps) {
+        if (s.kind !== 'gear' || (this.bank[s.id] || 0) > 0) continue;
+        const a = this.acquire(s.id, 1);
+        for (const tr of a.training) train(tr.skill, tr.level, `for ${this.name(s.id)}`);
+        const own = Math.max(0, a.total - a.training.reduce((x, t) => x + t.hours, 0));
+        steps.push({ kind: 'make', id: 'g:' + s.id, m: { id: 'g:' + s.id, n: this.name(s.id), i: this.items[s.id]?.i }, item: s.id, title: `Get ${this.name(s.id)}`, hours: own,
+          why: `gear for ${name}${a.steps.length ? ' · ' + a.steps.map((x) => x.m.n).slice(-3).join(' → ') : ''}` });
+      }
+      return rd;
+    };
     let title = '';
     if (goal.type === 'quest') { title = this.g.quests[goal.id]?.n || goal.id; doQuest(goal.id); }
+    else if (goal.type === 'ready') {
+      const e = this.g.combat.enemies[goal.id];
+      title = `Fight ${e?.n || goal.id} safely`;
+      const m = this.byId.get('Combat:' + goal.id);
+      if (m) for (const r of m.r) { if (r.t === 'quest') doQuest(r.id); else if (r.t === 'lvl') train(r.s, r.l, `to reach ${m.loc || e?.n}`); }
+      const plan = this.combatPlan(goal.id, 'money');
+      const rd = plan ? null : getReady(goal.id);
+      const f = plan ? plan.f : rd?.after;
+      const loot = (m?.out || []).reduce((a, [it, q]) => a + q * this.value(it), 0) + (m?.gp || 0);
+      if (plan || rd?.reached) {
+        const net = m ? this.readyGph(m, f) : 0;
+        steps.push({ kind: 'kill', id: 'k:' + goal.id, enemy: goal.id, title: `Fight ${e?.n}`, hours: 0, why: `about ${(HOUR / f.killMs).toFixed(1)} kills/hr · ${Math.round((HOUR / f.killMs) * loot).toLocaleString('en-US')} gp/hr of loot, ${Math.round(net).toLocaleString('en-US')} gp/hr after food` });
+        if (net <= 0) notes = [`Once ready it's safe, but you'd eat more food than ${e?.n} drops (${Math.round(net).toLocaleString('en-US')} gp/hr). Worth it only for its drops or a quest, not for money.`];
+      }
+      else notes = [`${e?.n} is out of reach for now: ${rd?.why || 'no safe loadout found'}`];
+    }
     else if (goal.type === 'level') { title = `${goal.skill} ${goal.level}`; train(goal.skill, goal.level, 'your goal'); }
     else if (goal.type === 'unlock') {
       const m = this.byId.get(goal.id);
@@ -2343,8 +2625,10 @@ export class Engine {
           if (st.ok) continue;
           const plan = this.combatPlan(r.key, 'money');
           const left = r.n - (st.have || 0);
+          const rd = plan ? null : getReady(r.key);
+          const f = plan ? plan.f : rd?.reached ? rd.after : null;
           steps.push({ kind: 'kill', id: 'k:' + r.key, title: `Kill ${left} ${this.g.combat.enemies[r.key]?.n || r.key}`, skill: 'Combat', enemy: r.key,
-            hours: plan ? left * plan.f.killMs / HOUR : Infinity, why: plan ? `${plan.style} · needed for ${m.n}` : 'not safe with your gear yet' });
+            hours: f ? left * f.killMs / HOUR : Infinity, why: plan ? `${plan.style} · needed for ${m.n}` : rd?.reached ? `once you're ready (steps above) · needed for ${m.n}` : `out of reach for now: ${rd?.why || 'no safe loadout'}` });
         }
         const rank = m.r.find((r) => r.t === 'rank');
         if (rank && !this.reqStatus(rank).ok) {
@@ -2369,7 +2653,6 @@ export class Engine {
         steps.push({ kind: 'unlock', id: 'u:' + m.id, m, title: `Start ${m.n}`, hours: 0, why });
       }
     }
-    let notes = [];
     if (goal.type === 'item') {
       const qty = Math.max(1, Math.round(goal.qty || 1));
       const a = this.acquire(goal.id, qty);
@@ -2388,7 +2671,7 @@ export class Engine {
         const what = items.map(([it, q]) => `${Math.ceil(q).toLocaleString('en-US')} ${this.name(it)}`).join(', ');
         const verb = s.conv ? (s.conv.kind === 'open' ? `Open ${Math.ceil(s.count).toLocaleString('en-US')} × ${this.name(s.conv.in[0][0])} for` : 'Upgrade into') : s.m.x?.t === 'fight' ? `Fight ${s.m.n} for` : s.m.x?.t === 'dungeon' ? `Run ${s.m.n} for` : s.m.k === 'passive' ? 'Grow' : ({ Woodcutting: 'Cut', Fishing: 'Catch', Mining: 'Mine', Thieving: 'Steal', Hunting: 'Hunt', Cooking: 'Cook', Smithing: 'Smith', Fletching: 'Fletch', Crafting: 'Craft', Herblore: 'Brew', Runecrafting: 'Craft', Firemaking: 'Burn for', Beastcrafting: 'Craft' })[s.m.s] || 'Make';
         steps.push({ kind: 'make', id: 'm:' + s.m.id, m: s.m, item: items[0]?.[0], title: `${verb} ${what}`, hours: s.m.k === 'passive' ? 0 : s.hours,
-          why: s.conv ? (s.gp > 0 ? `costs ${Math.round(s.gp).toLocaleString('en-US')} gold` : 'instant') : s.m.k === 'passive' ? `${s.m.n} plot, about ${fmtDuration(s.hours)} of growing in the background` : `${s.m.s} · ${s.m.n}${s.m.loc ? ' (' + s.m.loc + ')' : ''}` });
+          why: a.readyFor.includes(s.m.id) ? `once you're ready to fight it: the training and gear above · ${s.m.loc || ''}` : s.conv ? (s.gp > 0 ? `costs ${Math.round(s.gp).toLocaleString('en-US')} gold` : 'instant') : s.m.k === 'passive' ? `${s.m.n} plot, about ${fmtDuration(s.hours)} of growing in the background` : `${s.m.s} · ${s.m.n}${s.m.loc ? ' (' + s.m.loc + ')' : ''}` });
       }
     }
     let t = 0;

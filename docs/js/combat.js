@@ -201,7 +201,8 @@ export function bestLoadout(g, pool, lv, enemy, score, startGear = {}, weaponOk 
     if (!f) return { s: -Infinity, f: null, p };
     const v = score(f, p);
     // not viable (too dangerous / too slow): rank by how close it is, so armour can still fix it
-    return { s: v == null ? -1e12 - f.danger * 1e9 - f.killMs : v, ok: v != null, f, p };
+    // (whichever of danger or kill time is further over its limit, so both can be fixed)
+    return { s: v == null ? -1e12 - Math.max(f.danger / 0.9, f.killMs / 1200000) * 1e9 : v, ok: v != null, f, p };
   };
   let best = null;
   for (const style of STYLES) {

@@ -1095,3 +1095,13 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 .lo-run .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .lo-foot { font-size: 12px; }
 @media (max-width: 640px) { .lo-grid { grid-template-columns: 1fr; } }
+
+/* fights within reach */
+.reach-panel { padding: 14px 18px; margin-bottom: 12px; display: grid; gap: 10px; }
+.reach-panel .sl-h .btn { margin-left: auto; }
+.rch-list { display: grid; gap: 5px; }
+.rch-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) 90px 120px 76px; gap: 10px; align-items: center; padding: 7px 10px; border-radius: 10px; background: rgba(0, 0, 0, .2); border: 1px solid var(--line); }
+.rch-row.far { opacity: .65; }
+.rch-main { display: grid; min-width: 0; }
+.rch-main small { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .rch-row { grid-template-columns: 30px minmax(0, 1fr) 80px; } .rch-row .fm-v:nth-of-type(2), .rch-row .btn { display: none; } }
