@@ -9,7 +9,7 @@ import re
 import time
 
 ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs")
-V = time.strftime("%Y%m%d%H%M")
+V = time.strftime("%Y%m%d%H%M%S")
 PAT = re.compile(r"""((?:src|href)="(?:js|css)/[\w./-]+\.(?:js|css)|from\s+['"]\./[\w./-]+\.js|import\(\s*['"]\./[\w./-]+\.js)(\?v=\w+)?""")
 
 
