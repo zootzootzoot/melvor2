@@ -3,6 +3,7 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Items & recipes browser: every item and recipe with values, costs to make or buy, sources, uses, filters and sorting
 - Farm tab: plots and ready times from the save, best crop and compost per plot type (game yield formula), compost worth, compost bins, flower value, next plot to buy with payback
 - Game update Alpha 0.11.7 (save v32) supported; save sections are read independently so a format change can't block an import
 - Astrology: constellations and node picks read from the save, node bonuses applied to every rate, next-pick advisor (Training + Upgrades), node picks in the Plan; Astrology trainable. Agility checked: it only boosts itself in MI2
@@ -31,6 +32,5 @@ What players would pay for, ordered by value versus effort. Done items stay list
 
 ## Up next, in order
 1. **Combat, part 3.** Enemy special attacks and passives, prayers.
-2. **Item & recipe browser.** Filterable database of every item and recipe with values, sources and uses.
-3. **Multiple characters.** Switch between saved characters and compare them.
-4. **Shareable cards.** An image card of your profile and best methods for Discord.
+2. **Multiple characters.** Switch between saved characters and compare them.
+3. **Shareable cards.** An image card of your profile and best methods for Discord.

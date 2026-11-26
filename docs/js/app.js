@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611260416';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260416';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260416';
+import { decodeSave } from './save.js?v=202611260422';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260422';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260422';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -18,13 +18,14 @@ const MODES = {
   sell: { label: 'Value added', desc: 'The best crafts, with inputs priced at what they would sell for' },
 };
 const TABS = {
-  plan: 'Plan', money: 'Money makers', train: 'Training', quests: 'Quests', farm: 'Farm', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks',
+  plan: 'Plan', money: 'Money makers', train: 'Training', quests: 'Quests', farm: 'Farm', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks', items: 'Items',
 };
 
 const state = {
   game: null, engine: null, base: null, save: null, explorer: false,
   tab: 'money', mode: 'best', skill: '', q: '', passive: false, limit: 30, open: new Set(),
   bankView: 'process', bankSort: 'value', bankQ: '', bankSortTotal: true,
+  db: { view: 'items', q: '', cat: '', skill: '', owned: false, sort: 'value', limit: 60 },
   mods: true, trainSkill: '', trainTarget: null, trainPrefer: 'xp', trainLevel: null,
   upSort: 'payback', upFilter: 'all', history: null, window: 8, horizon: 96, goal: null,
 };
@@ -241,7 +242,7 @@ function renderTeaser() {
 
 // ---------------------------------------------------------------- dashboard
 function tabList() {
-  return state.explorer ? ['money', 'train'] : ['plan', 'money', 'train', 'quests', 'farm', 'upgrades', 'bank', 'unlocks'];
+  return state.explorer ? ['money', 'train', 'items'] : ['plan', 'money', 'train', 'quests', 'farm', 'upgrades', 'bank', 'unlocks', 'items'];
 }
 
 function renderDashboard() {
@@ -354,7 +355,7 @@ function renderView() {
   const v = $('#view');
   if (!v) return;
   setHash();
-  const views = { plan: viewPlan, money: viewMoney, train: viewTrain, quests: viewQuests, farm: viewFarm, upgrades: viewUpgrades, bank: viewBank, unlocks: viewUnlocks };
+  const views = { plan: viewPlan, money: viewMoney, train: viewTrain, quests: viewQuests, farm: viewFarm, items: viewItems, upgrades: viewUpgrades, bank: viewBank, unlocks: viewUnlocks };
   v.innerHTML = `<div class="view fade-in">${(views[state.tab] || viewMoney)()}</div>`;
   bindView(v);
 }
@@ -1234,6 +1235,115 @@ function potionSection() {
   }).join('')}</div>`;
 }
 
+// ---------------------------------------------------------------- item & recipe browser
+const DB_CATS = [['', 'All'], ['Equipment', 'Equipment'], ['Weapon', 'Weapons'], ['Toolbelt', 'Toolbelt'], ['Food', 'Food'], ['Openable', 'Chests'], ['HuntingTrap', 'Traps'], ['Compost', 'Compost'], ['Bury', 'Bones']];
+
+function dbItemRows() {
+  const e = E(), g = G();
+  const db = state.db;
+  const { costs } = e.solveChains();
+  const q = db.q.trim().toLowerCase();
+  let rows = Object.entries(g.items).map(([id, it]) => ({ id, it, have: e.bank[id] || 0 }));
+  if (db.cat) rows = rows.filter((x) => x.it.c.includes(db.cat));
+  if (db.skill) rows = rows.filter((x) => x.it.t.includes(db.skill));
+  if (db.owned) rows = rows.filter((x) => x.have > 0);
+  if (q) rows = rows.filter((x) => x.it.n.toLowerCase().includes(q) || x.id.toLowerCase().includes(q));
+  for (const x of rows) {
+    x.cost = costs.get(x.id) || null;
+    x.buy = e.buyPrice(x.id);
+    x.src = e.producers.get(x.id) || [];
+    x.use = e.consumers.get(x.id) || [];
+  }
+  const by = {
+    value: (a, b) => b.it.v - a.it.v,
+    name: (a, b) => a.it.n.localeCompare(b.it.n),
+    owned: (a, b) => b.have * b.it.v - a.have * a.it.v,
+    margin: (a, b) => ((b.cost ? b.it.v - b.cost.gp : -Infinity) - (a.cost ? a.it.v - a.cost.gp : -Infinity)),
+    uses: (a, b) => b.use.length - a.use.length,
+  };
+  return rows.sort(by[db.sort] || by.value);
+}
+
+function dbRecipeRows() {
+  const e = E();
+  const db = state.db;
+  const q = db.q.trim().toLowerCase();
+  let ms = e.methods.filter((m) => !m.quest && !(m.x?.t === 'fight' || m.id.startsWith('Dungeon:')));
+  if (db.skill) ms = ms.filter((m) => m.s === db.skill);
+  if (q) ms = ms.filter((m) => m.n.toLowerCase().includes(q) || m.in.some(([it]) => e.name(it).toLowerCase().includes(q)) || m.out.some(([it]) => e.name(it).toLowerCase().includes(q)));
+  const rows = ms.map((m) => {
+    const st = e.status(m);
+    if (db.owned && !st.unlocked) return null;
+    const lv = {};
+    for (const r of m.r) if (r.t === 'lvl') lv[r.s] = Math.max(e.level(r.s), r.l);
+    let s = null;
+    try { s = e.sellRate(m, st.unlocked ? undefined : { ...e.levels, ...lv }); } catch { s = null; }
+    return { m, st, gph: s?.gpPerHour ?? 0, xph: s?.r?.xp ?? 0 };
+  }).filter(Boolean);
+  const by = {
+    value: (a, b) => b.gph - a.gph,
+    name: (a, b) => a.m.n.localeCompare(b.m.n),
+    owned: (a, b) => (b.st.unlocked - a.st.unlocked) || b.gph - a.gph,
+    margin: (a, b) => b.xph - a.xph,
+    uses: (a, b) => a.m.lv - b.m.lv || a.m.n.localeCompare(b.m.n),
+  };
+  return rows.sort(by[db.sort] || by.value);
+}
+
+/** Missing requirements in words, one level per skill (the highest). */
+function missingText(missing) {
+  const lv = new Map(), other = [];
+  for (const r of missing) if (r.kind === 'lvl') lv.set(r.skill, Math.max(lv.get(r.skill) || 0, r.need)); else other.push(r.text);
+  return [...[...lv].map(([k, n]) => `${k} ${n}`), ...new Set(other)].join(', ');
+}
+
+function viewItems() {
+  const e = E(), g = G();
+  const db = state.db;
+  const isItems = db.view === 'items';
+  const rows = isItems ? dbItemRows() : dbRecipeRows();
+  const skills = isItems ? [...SKILL_ORDER, 'Shop', 'Quests', 'Upgrade', 'Astrology'] : [...SKILL_ORDER.filter((k) => k !== 'Combat'), 'Astrology'];
+  const sorts = isItems ? [['value', 'Value'], ['margin', 'Profit to make'], ['owned', 'Bank value'], ['uses', 'Most used'], ['name', 'A–Z']]
+    : [['value', 'Gold / hr'], ['margin', 'XP / hr'], ['uses', 'Level'], ['owned', 'Unlocked first'], ['name', 'A–Z']];
+  const icons = (list, n = 3) => list.slice(0, n).map(([it, q]) => `<span class="db-ic" data-item="${esc(it)}" title="${esc(e.name(it))}">${img(itemIcon(it), '', 20)}${q !== 1 ? `<small>${fmtNum(q, 2)}</small>` : ''}</span>`).join('') + (list.length > n ? `<small class="muted">+${list.length - n}</small>` : '');
+  const itemRow = (x) => {
+    const srcSk = [...new Set(x.src.map((m) => m.s))];
+    const make = x.cost && x.cost.via?.kind === 'make';
+    return `<div class="db-row" data-item="${esc(x.id)}">
+      ${img(x.it.i, '', 32)}
+      <span class="db-main"><b>${esc(x.it.n)}</b><small>${x.it.c.filter((c) => c !== 'Toolbelt' || !x.it.c.includes('Equipment')).map(esc).join(' · ') || 'Resource'}${x.it.eq?.slot ? ' · ' + esc(x.it.eq.slot) : x.it.slot ? ' · ' + esc(String(x.it.slot).replace(/([a-z])([A-Z])/g, '$1 $2')) : ''}${x.it.heal ? ` · heals ${fmtNum(x.it.heal)}` : ''}</small></span>
+      <span class="db-sk">${srcSk.slice(0, 4).map((s) => img(skillIcon(s) || G().skills['_' + s]?.i, s, 18)).join('')}${Number.isFinite(x.buy) ? `<span class="pill">shop ${fmtGp(x.buy)}</span>` : ''}</span>
+      <span class="db-v"><b class="num gold">${fmtGp(x.it.v)}</b><small>sells for</small></span>
+      <span class="db-v"><b class="num">${make ? fmtGp(x.cost.gp) : Number.isFinite(x.buy) ? fmtGp(x.buy) : '—'}</b><small>${make ? `to make · ${fmtMs(x.cost.t)}` : Number.isFinite(x.buy) ? 'to buy' : 'cost'}</small></span>
+      <span class="db-v"><b class="num">${x.use.length || '—'}</b><small>uses</small></span>
+      <span class="db-v"><b class="num ${x.have ? '' : 'muted'}">${x.have ? fmtNum(x.have) : '—'}</b><small>you have</small></span>
+    </div>`;
+  };
+  const recipeRow = (x) => `<div class="db-row db-rec ${x.st.unlocked ? '' : 'locked'}" data-item="${esc(x.m.primary || x.m.out[0]?.[0] || '')}">
+      ${img(methodIcon(x.m), '', 32)}
+      <span class="db-main"><b>${esc(x.m.n)}</b><small>${img(skillIcon(x.m.s), '', 14)} ${esc(x.m.s)} ${x.m.lv}${x.m.loc ? ' · ' + esc(x.m.loc) : ''}${x.st.unlocked ? '' : ` · <span class="red">${esc(missingText(x.st.missing))}</span>`}</small></span>
+      <span class="db-flow">${x.m.in.length ? icons(x.m.in) + '<span class="arr">→</span>' : ''}${icons(x.m.out)}</span>
+      <span class="db-v"><b class="num ${x.gph < 0 ? 'red' : 'gold'}">${fmtGp(x.gph)}</b><small>gp/hr${x.st.unlocked ? '' : ' at unlock'}</small></span>
+      <span class="db-v"><b class="num">${fmtGp(x.xph)}</b><small>xp/hr</small></span>
+    </div>`;
+  const shown = rows.slice(0, db.limit);
+  return `
+  <div class="section-head"><div><h2>Items &amp; recipes</h2><p>Every item and recipe in the game, with values, sources and uses. Item costs are the cheapest of making it yourself (your time valued at your best rate) or buying it. Click any row for the full item card.</p></div>${state.explorer ? '' : modsToggle()}</div>
+  <div class="controls">
+    <div class="filter-row">
+      <div class="seg" role="tablist"><button data-db="view:items" aria-pressed="${isItems}">Items</button><button data-db="view:recipes" aria-pressed="${!isItems}">Recipes</button></div>
+      <div class="search">${svg.search}<input id="dbq" type="search" placeholder="Search ${isItems ? 'items' : 'recipes, inputs or products'}" value="${esc(db.q)}" aria-label="Search"/></div>
+      <label class="toggle"><input type="checkbox" id="dbowned" ${db.owned ? 'checked' : ''}/>${isItems ? 'In my bank' : 'Unlocked only'}</label>
+      <div class="seg" role="group" aria-label="Sort">${sorts.map(([k, l]) => `<button data-db="sort:${k}" aria-pressed="${db.sort === k}">${l}</button>`).join('')}</div>
+    </div>
+    ${isItems ? `<div class="chips" role="group" aria-label="Category">${DB_CATS.map(([k, l]) => `<button class="chip ${k ? '' : 'all'}" data-db="cat:${k}" aria-pressed="${db.cat === k}">${l}</button>`).join('')}</div>` : ''}
+    <div class="chips" role="group" aria-label="Skill"><button class="chip all" data-db="skill:" aria-pressed="${!db.skill}">${isItems ? 'Any source' : 'All skills'}</button>${skills.map((s) => `<button class="chip" data-db="skill:${s}" aria-pressed="${db.skill === s}">${img(skillIcon(s) || G().skills['_' + s]?.i, '', 18)}${s}</button>`).join('')}</div>
+  </div>
+  <div class="muted db-count">${fmtNum(rows.length)} ${isItems ? 'item' : 'recipe'}${rows.length === 1 ? '' : 's'}</div>
+  <div class="db-list">${shown.map(isItems ? itemRow : recipeRow).join('') || '<div class="empty">Nothing matches.</div>'}</div>
+  ${rows.length > db.limit ? `<button class="btn more-btn" data-db="more:1">Show ${Math.min(60, rows.length - db.limit)} more <span class="muted">· ${rows.length - db.limit} left</span></button>` : ''}`;
+}
+
 // ---------------------------------------------------------------- farm
 function viewFarm() {
   const e = E();
@@ -1576,7 +1686,7 @@ function openPalette() {
 function bindView(v) {
   v.onclick = (ev) => {
     const itemEl = ev.target.closest('[data-item]');
-    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-goaltype],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go]');
+    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-goaltype],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go],[data-db]');
     // Item icons open the item drawer, even inside a clickable row.
     if (itemEl?.dataset.item && (!t || (t !== itemEl && t.contains(itemEl)))) { ev.stopPropagation(); openItem(itemEl.dataset.item); return; }
     if (!t) return;
@@ -1626,9 +1736,19 @@ function bindView(v) {
     if (t.dataset.upfilter) { state.upFilter = t.dataset.upfilter; return rerender(); }
     if (t.dataset.gotab) return go(t.dataset.gotab);
     if (t.id === 'more') { state.limit += 30; return rerender(); }
+    if (t.dataset.db) {
+      const [k, v] = t.dataset.db.split(':');
+      if (k === 'more') state.db.limit += 60;
+      else { state.db[k] = v; state.db.limit = 60; if (k === 'view') { state.db.sort = 'value'; state.db.skill = ''; state.db.cat = ''; } }
+      return rerender();
+    }
   };
   const q = $('#q', v);
   if (q) q.oninput = debounce(() => { state.q = q.value; state.limit = 30; rerender(false, '#q'); }, 140);
+  const dbq = $('#dbq', v);
+  if (dbq) dbq.oninput = debounce(() => { state.db.q = dbq.value; state.db.limit = 60; rerender(false, '#dbq'); }, 140);
+  const dbo = $('#dbowned', v);
+  if (dbo) dbo.onchange = () => { state.db.owned = dbo.checked; state.db.limit = 60; rerender(); };
   const bq = $('#bq', v);
   if (bq) bq.oninput = debounce(() => { state.bankQ = bq.value; rerender(false, '#bq'); }, 120);
   const passive = $('#passive', v);

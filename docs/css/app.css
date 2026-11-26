@@ -1030,3 +1030,23 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 
 /* keep the profile column from crowding the stat cards when meta pills are long */
 .profile > :first-child { max-width: 440px; min-width: 0; }
+
+/* item & recipe browser */
+.db-count { font-size: 12px; margin: 6px 2px; }
+.db-list { display: grid; gap: 4px; }
+.db-row { display: grid; grid-template-columns: 32px minmax(0, 1.6fr) minmax(0, 1fr) 84px 96px 56px 74px; gap: 12px; align-items: center; padding: 7px 12px; border-radius: 10px; background: rgba(0, 0, 0, .18); border: 1px solid var(--line); cursor: pointer; transition: border-color .15s; }
+.db-row:hover { border-color: rgba(245, 196, 81, .35); }
+.db-rec { grid-template-columns: 32px minmax(0, 1.4fr) minmax(0, 1.4fr) 84px 74px; }
+.db-rec.locked { opacity: .72; }
+.db-main { display: grid; min-width: 0; }
+.db-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-main small { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-main small img { display: inline-block; vertical-align: -3px; width: 14px; height: 14px; }
+.db-sk { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.db-v { display: grid; justify-items: end; line-height: 1.15; }
+.db-v small { font-size: 10px; color: var(--text-3); white-space: nowrap; }
+.db-flow { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.db-ic { display: inline-flex; align-items: center; gap: 1px; }
+.db-ic small { font-size: 10px; color: var(--text-3); }
+.db-flow .arr { color: var(--text-3); margin: 0 3px; }
+@media (max-width: 900px) { .db-row { grid-template-columns: 32px minmax(0, 1fr) 84px 74px; } .db-row .db-sk, .db-row .db-v:nth-of-type(3), .db-row .db-v:nth-of-type(4) { display: none; } .db-rec { grid-template-columns: 32px minmax(0, 1fr) 84px 74px; } .db-rec .db-flow { display: none; } }
