@@ -11,6 +11,7 @@ Everything runs in the browser. Your save is decoded locally and never uploaded.
 The site has eight tabs: **Overview**, **Plan**, **Money**, **Skills**, **Quests**, **Farm**, **Bank** and **Items**. Overview is the home page and carries the full profile header; the other tabs show a slim bar so the page is about the task.
 
 - **Overview.** A read of your account in plain words: what stage it's at, the combat style you lean on and what's untrained, your strongest and barely-started skills, and where your money comes from (active, left running, farm). Below that:
+  - **Your progress** along several axes, each with its change since your last import: **net worth** (gold, plus everything you own at sell value (bank, worn gear, toolbelt), plus what you've put into permanent shop upgrades and farm plots, shown as a split bar with the gain per day), total level, quests, collection, mastery guild ranks and earning power (sustainable gold/hr). Net worth is something the game doesn't show, and it's the best single measure of how far an account has come; it also leads the profile header and the share card.
   - **Right now:** things to act on, such as farm plots ready or empty, astrology picks waiting, an upgrade you can already afford, a quest ready to start, a slayer task that isn't safe, or XP sitting in your bank.
   - **Do this next:** the first three steps of your route (several upgrades in a row read as one step).
   - **Leaving it overnight?** The best thing to leave running for gold, and the best thing for progress: idle training (gathering, or your bank's stock) in a skill your quests or the cheapest level gates need, with the levels you'd gain in 8 hours.
@@ -38,7 +39,7 @@ The site has eight tabs: **Overview**, **Plan**, **Money**, **Skills**, **Quests
 - **Copy summary.** One click copies your best money maker, best idle action and next upgrade, ready to paste into Discord.
 - **Share card.** A 1200×630 picture of your profile (best gold/hr and method, bank value, farm income, the next step on your route, and your top 20 skills), drawn in your browser. Copy it or download it as a PNG.
 - **Collection** (in Bank). Items you've found against all items, per source skill, with the quickest missing items to get at your rates and what's blocking the rest.
-- **Your pace** (in Overview). With two or more imports, your total level and wealth over time, XP per day per skill, and when you'll reach each next milestone.
+- **Your pace** (in Overview). With two or more imports, your total level and net worth over time, XP per day per skill, and when you'll reach each next milestone.
 - **Explore at 99.** A sandbox with every skill at 99 and every upgrade, for browsing without a save. The landing page previews it.
 
 ## Layout

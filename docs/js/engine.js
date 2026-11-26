@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261126173718';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261126183820';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -2011,6 +2011,48 @@ export class Engine {
     skills.sort((a, b) => (b.need > b.from) - (a.need > a.from) || b.saved - a.saved);
     const res = { keep: [...keep].map(([item, k]) => ({ item, qty: k.qty, have: this.bank[item] || 0, why: [...k.why] })), skills, need };
     this._cache.set('leftovers', res);
+    return res;
+  }
+
+  // ---------------------------------------------------------------- progress
+  /**
+   * Progress along several axes at once. Net worth is gold + everything you own at sell value (bank, worn gear,
+   * toolbelt) + what you've sunk into permanent things (shop upgrades and farm plots, at what they cost).
+   */
+  progress() {
+    if (this._cache.has('progress')) return this._cache.get('progress');
+    const p = this.p;
+    const gold = p.wallet?.GoldPieces ?? p.header?.gp ?? 0;
+    const bank = this.bankValue().total;
+    let gear = 0;
+    for (const x of Object.values(p.equipment || {})) if (x?.item) gear += this.value(x.item) * Math.max(1, x.qty || 1);
+    for (const id of Object.keys(p.tools || {})) gear += this.value(id);
+    let shop = 0;
+    for (const [id, n] of Object.entries(p.shop || {})) {
+      const s = this.g.shop[id];
+      if (!s || !(n > 0)) continue;
+      const gp = s.cost.find(([c]) => c === 'GoldPieces')?.[1] || 0;
+      shop += n * (gp + s.ci.reduce((a, [it, q]) => a + q * this.value(it), 0));
+    }
+    let plots = 0;
+    for (const [id, pl] of Object.entries(this.g.farm?.plots || {})) if ((p.farm?.plots?.[id]?.state ?? 0) > 0) plots += pl.gp + (pl.ci || []).reduce((a, [it, q]) => a + q * this.value(it), 0);
+    const invested = shop + plots;
+    const lvSkills = Object.entries(p.skills || {}).filter(([k]) => this.g.skills[k] && k !== 'Combat');
+    const totalLevel = p.header?.totalLevel ?? lvSkills.reduce((a, [, v]) => a + v.level, 0);
+    const pct = lvSkills.reduce((a, [, v]) => a + Math.min(99, v.level), 0) / Math.max(1, lvSkills.length * 99);
+    const quests = this.questList();
+    let col = null;
+    try { const c = this.collection(); col = { have: c.have, total: c.total }; } catch { col = null; }
+    let ranks = 0, rankTotal = 0;
+    for (const gs of Object.values(this.guild || {})) { if (!gs.order?.length) continue; ranks += Math.max(0, gs.order.indexOf(gs.rank)); rankTotal += gs.order.length - 1; }
+    const earn = this.ranked('chain')[0]?.gph || 0;
+    const res = {
+      gold, bank, gear, shop, plots, invested, liquid: gold + bank + gear, worth: gold + bank + gear + invested,
+      slayerCoins: p.wallet?.SlayerCoins ?? p.header?.slayerCoins ?? 0,
+      totalLevel, pct, questsDone: quests.filter((q) => q.done).length, questsTotal: quests.length,
+      collection: col, ranks, rankTotal, earn,
+    };
+    this._cache.set('progress', res);
     return res;
   }
 

@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=20261126173718';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261126173718';
-import { drawCard } from './card.js?v=20261126173718';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261126173718';
+import { decodeSave } from './save.js?v=20261126183820';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261126183820';
+import { drawCard } from './card.js?v=20261126183820';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261126183820';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -148,11 +148,22 @@ function recordHistory(save) {
     xp: Object.fromEntries(Object.entries(save.skills).map(([k, v]) => [k, Math.round(v.xp)])),
     bank: Math.round(E().bankValue().total),
   };
-  if (!list.length || list[list.length - 1].t !== t) list.push(snap);
+  try {
+    const P = E().progress();
+    Object.assign(snap, { nw: Math.round(P.worth), inv: Math.round(P.invested), q: P.questsDone, col: P.collection?.have ?? null, gr: P.ranks, earn: Math.round(P.earn) });
+  } catch { /* older engine data */ }
+  // one entry per save time, in time order (opening an older save slots it in, it doesn't become "latest")
+  const byT = new Map();
+  for (const x of list) byT.set(x.t, { ...(byT.get(x.t) || {}), ...x });
+  list = [...byT.values()];
+  const at = list.findIndex((x) => x.t === t);
+  if (at >= 0) list[at] = { ...list[at], ...snap }; else list.push(snap);
+  list.sort((a, b) => a.t - b.t);
   list = list.slice(-60);
   try { localStorage.setItem(key, JSON.stringify(list)); } catch { /* ignore */ }
-  const prev = list.length > 1 ? list[list.length - 2] : null;
-  return { list, prev, cur: snap };
+  const i = list.findIndex((x) => x.t === t);
+  const prev = i > 0 ? list[i - 1] : null;
+  return { list: list.slice(0, i + 1), prev, cur: list[i] };
 }
 
 function explorerSave() {
@@ -296,6 +307,7 @@ function renderDashboard() {
 
   const best = e.ranked(state.explorer ? 'chain' : 'best')[0];
   const bv = e.bankValue();
+  const P = state.explorer ? null : e.progress();
   const ago = s.header.timestamp ? relTime(s.header.timestamp) : '';
   const skillsShown = Object.entries(s.skills).filter(([k]) => g.skills[k] && SKILL_ORDER.includes(k)).sort((a, b) => order(a[0]) - order(b[0]));
   const others = Object.entries(s.skills).filter(([k]) => g.skills[k] && !SKILL_ORDER.includes(k) && k !== 'Combat');
@@ -303,6 +315,7 @@ function renderDashboard() {
   const hist = state.history;
   const prev = hist?.prev;
   const delta = prev ? {
+    nw: prev.nw != null && hist.cur.nw != null ? hist.cur.nw - prev.nw : null,
     gp: hist.cur.gp - prev.gp, bank: hist.cur.bank - prev.bank, tl: (hist.cur.tl ?? 0) - (prev.tl ?? 0),
     xp: Object.entries(hist.cur.xp).reduce((a, [k, v]) => a + Math.max(0, v - (prev.xp[k] ?? v)), 0),
   } : null;
@@ -315,8 +328,7 @@ function renderDashboard() {
     <b class="sb-name">${esc(s.header.name)}</b>
     <span>Total level <b class="num">${fmtNum(s.header.totalLevel)}</b></span>
     ${best ? `<span>${img(skillIcon(best.m.s), '', 16)}<b class="num gold">${fmtGp(best.gph)}</b>/hr · ${esc(best.m.n)}</span>` : ''}
-    <span>${img(g.currencies.GoldPieces, '', 16)}<b class="num">${fmtGp(s.wallet?.GoldPieces ?? s.header.gp ?? 0)}</b></span>
-    <span>${img(g.skills.Bank?.i, '', 16)}<b class="num">${fmtGp(bv.total)}</b> in bank</span>
+    <span>${img(g.currencies.GoldPieces, '', 16)}<b class="num">${fmtGp(P?.worth ?? 0)}</b> net worth</span>
     <button class="linkish" data-go="overview">Overview</button>
   </div>`;
   state.headFull = `
@@ -328,14 +340,14 @@ function renderDashboard() {
         <span class="pill">${esc(modeName(s.header.gamemode))}</span>
         ${state.explorer ? '<span class="pill gold">All skills 99 · every shop upgrade</span>' : `<span class="pill">Saved ${esc(ago)}</span>`}
         ${state.explorer ? '' : `<button class="pill btn-pill" id="copy-sum" title="Copy a short summary to paste into Discord">${svg.paste} Copy summary</button><button class="pill btn-pill" id="share-card" title="A picture of your profile to post in Discord">${svg.up} Share card</button>`}
-        ${delta ? `<span class="pill green" title="Compared with your previous import (${esc(relTime(prev.t))})">${svg.up} Since ${esc(relTime(prev.t))}: ${delta.tl > 0 ? `+${delta.tl} levels · ` : ''}${fmtGp(delta.xp)} xp · ${fmtGp(delta.gp + delta.bank, { sign: true })} worth</span>` : ''}
+        ${delta ? `<span class="pill green" title="Compared with your previous import (${esc(relTime(prev.t))})">${svg.up} Since ${esc(relTime(prev.t))}: ${delta.tl > 0 ? `+${delta.tl} levels · ` : ''}${fmtGp(delta.xp)} xp · ${fmtGp(delta.nw ?? delta.gp + delta.bank, { sign: true })} ${delta.nw != null ? 'net worth' : 'worth'}</span>` : ''}
       </div>
     </div>
     <div class="stats stagger ${state.explorer ? 'four' : ''}">
-      <button class="panel stat hero" data-go="money"><div class="label">${img(skillIcon(best?.m.s) || g.currencies.GoldPieces, '', 16)}Best right now</div><div class="value num" data-count="${best ? Math.round(best.gph) : 0}">${best ? fmtGp(best.gph) : '—'}</div><div class="sub">${best ? `gp/hr · ${esc(best.m.n)}` : 'nothing unlocked yet'}</div></button>
-      ${state.explorer ? explorerTiles() : `
-      <div class="panel stat"><div class="label">${img(g.currencies.GoldPieces, '', 16)}Gold</div><div class="value num" data-count="${s.wallet?.GoldPieces ?? s.header.gp ?? 0}">${fmtGp(s.wallet?.GoldPieces ?? s.header.gp ?? 0)}</div><div class="sub">in your wallet</div></div>
-      <button class="panel stat" data-go="bank"><div class="label">${img(g.skills.Bank?.i, '', 16)}Bank value</div><div class="value num" data-count="${Math.round(bv.total)}">${fmtGp(bv.total)}</div><div class="sub">${fmtNum(bv.rows.length)} stacks if sold now</div></button>
+      ${state.explorer ? `<button class="panel stat hero" data-go="money"><div class="label">${img(skillIcon(best?.m.s) || g.currencies.GoldPieces, '', 16)}Best right now</div><div class="value num" data-count="${best ? Math.round(best.gph) : 0}">${best ? fmtGp(best.gph) : '—'}</div><div class="sub">${best ? `gp/hr · ${esc(best.m.n)}` : 'nothing unlocked yet'}</div></button>${explorerTiles()}` : `
+      <button class="panel stat hero" data-go="bank"><div class="label">${img(g.currencies.GoldPieces, '', 16)}Net worth</div><div class="value num" data-count="${Math.round(P.worth)}">${fmtGp(P.worth)}</div><div class="sub">${fmtGp(P.gold)} gold · ${fmtGp(P.bank)} bank · ${fmtGp(P.invested)} invested</div></button>
+      <button class="panel stat" data-go="money"><div class="label">${img(skillIcon(best?.m.s) || g.currencies.GoldPieces, '', 16)}Best right now</div><div class="value num" data-count="${best ? Math.round(best.gph) : 0}">${best ? fmtGp(best.gph) : '—'}</div><div class="sub">${best ? `gp/hr · ${esc(best.m.n)}` : 'nothing unlocked yet'}</div></button>
+      <button class="panel stat" data-go="train"><div class="label">${img(g.skills.Quests?.i, '', 16)}Total level</div><div class="value num">${fmtNum(P.totalLevel)}</div><div class="sub">${P.questsDone}/${P.questsTotal} quests · ${Math.round(P.pct * 100)}% to 99s</div></button>
 `}
     </div>
   </section>
@@ -356,7 +368,7 @@ function renderDashboard() {
   if (cs) cs.onclick = async () => {
     const top = e.ranked('best')[0], scratch = e.ranked('chain')[0], afk = e.ranked('afk', { window: 8 })[0];
     const lines = [
-      `${s.header.name} · total level ${s.header.totalLevel} · bank ${fmtGp(bv.total)}`,
+      `${s.header.name} · total level ${s.header.totalLevel} · net worth ${fmtGp(P.worth)} (bank ${fmtGp(bv.total)}, invested ${fmtGp(P.invested)})`,
       top ? `Best money maker: ${top.m.n} ${fmtGp(top.gph)} gp/hr${top.src === 'bank' ? ` (from bank, ${fmtDuration(top.bank.hours)})` : ''}` : '',
       scratch && scratch !== top ? `Best from scratch: ${scratch.m.n} ${fmtGp(scratch.gph)} gp/hr` : '',
       afk ? `Best to leave running 8h: ${afk.m.n} ${fmtGp(afk.total)}` : '',
@@ -1070,7 +1082,8 @@ function paceSection() {
   }).filter((r) => r.perDay > 0).sort((a, b) => b.perDay - a.perDay);
   const W = 640, Hh = 110;
   const T0 = first.t, T1 = last.t || T0 + 1;
-  const worth = list.map((x) => (x.gp || 0) + (x.bank || 0)), tls = list.map((x) => x.tl || 0);
+  const allNw = list.every((x) => x.nw != null);
+  const worth = list.map((x) => (allNw ? x.nw : (x.gp || 0) + (x.bank || 0))), tls = list.map((x) => x.tl || 0);
   const line = (vals, color) => {
     const mx = Math.max(...vals), mn = Math.min(...vals) - (Math.max(...vals) - Math.min(...vals)) * 0.1 - 1e-9;
     return `<path d="${list.map((x, i) => `${i ? 'L' : 'M'}${8 + ((x.t - T0) / Math.max(T1 - T0, 1)) * (W - 16)},${Hh - 10 - ((vals[i] - mn) / Math.max(mx - mn, 1)) * (Hh - 24)}`).join(' ')}" fill="none" stroke="${color}" stroke-width="2.2" vector-effect="non-scaling-stroke"/>`;
@@ -1078,9 +1091,9 @@ function paceSection() {
   return `<h3 class="bu-h3">Your pace <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">· ${list.length} imports over ${fmtDuration(days * 24)}</span></h3>
   <div class="panel pace">
     <div class="pace-k"><span><small>Total level</small><b class="num">${fmtNum(last.tl)}</b><em class="green">+${fmtNum((last.tl || 0) - (first.tl || 0))}</em></span>
-      <span><small>Gold + bank</small><b class="num">${fmtGp(worth[worth.length - 1])}</b><em class="${worth[worth.length - 1] >= worth[0] ? 'green' : 'red'}">${fmtGp(worth[worth.length - 1] - worth[0], { sign: true })}</em></span></div>
+      <span><small>${allNw ? 'Net worth' : 'Gold + bank'}</small><b class="num">${fmtGp(worth[worth.length - 1])}</b><em class="${worth[worth.length - 1] >= worth[0] ? 'green' : 'red'}">${fmtGp(worth[worth.length - 1] - worth[0], { sign: true })}</em></span></div>
     <svg class="rate-chart" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none">${line(tls, '#8fb8ff')}${line(worth, '#f3c463')}</svg>
-    <div class="pace-legend"><span><b style="background:#8fb8ff"></b>Total level</span><span><b style="background:#f3c463"></b>Gold + bank value</span></div>
+    <div class="pace-legend"><span><b style="background:#8fb8ff"></b>Total level</span><span><b style="background:#f3c463"></b>${allNw ? 'Net worth' : 'Gold + bank value'}</span></div>
   </div>
   ${rows.length ? `<div class="pace-list">${rows.slice(0, 12).map((r) => `<div class="pace-row">${img(skillIcon(r.k), '', 20)}<b>${esc(r.k)}</b><span class="num">${fmtGp(r.perDay)} xp/day</span><span class="muted">${r.next ? `${r.next} in ${Number.isFinite(r.eta) ? fmtDuration(r.eta * 24) : '—'}` : 'maxed'}</span></div>`).join('')}</div>` : ''}`;
 }
@@ -1140,6 +1153,46 @@ function viewRoute() {
   <p class="muted plan-note">Between steps, keep running your best money maker. Times are estimates at your current rates. Quests with parts the site can't model yet (agility, astrology, dungeons) are marked, and those parts aren't counted in their time.</p>`;
 }
 
+// ---------------------------------------------------------------- progress (several axes, with trends)
+function progressSection() {
+  const e = E(), g = G();
+  const P = e.progress();
+  const prev = state.history?.prev;
+  const days = prev ? Math.max((state.history.cur.t - prev.t) / 86400000, 1 / 24) : 0;
+  const delta = (cur, key, fmt = fmtGp) => {
+    if (!prev || prev[key] == null) return '';
+    const d = cur - prev[key];
+    if (Math.abs(d) < 1e-9) return '<em class="muted">no change</em>';
+    return `<em class="${d > 0 ? 'green' : 'red'}">${d > 0 ? '+' : '−'}${fmt(Math.abs(d))}</em>`;
+  };
+  const perDay = prev && prev.nw != null ? (P.worth - prev.nw) / days : null;
+  const tile = (icon, label, value, sub, d, go) => `<button class="panel pg-tile" ${go}><div class="label">${img(icon, '', 16)}${label}</div><div class="value num">${value}</div><div class="sub">${sub}</div>${d ? `<div class="pg-d">${d}</div>` : ''}</button>`;
+  const share = (x) => (P.worth > 0 ? Math.max(2, (x / P.worth) * 100) : 0);
+  return `<section class="ov-sec">
+    <div class="ov-h"><h3>Your progress</h3><span class="muted" style="font-size:13px">${prev ? `since your last import, ${esc(relTime(new Date(prev.t)))}` : 'import again later to see what changed'}</span></div>
+    <div class="panel pg-worth">
+      <div class="pg-wk"><small>Net worth</small><b class="num gold">${fmtGp(P.worth)}</b>${delta(P.worth, 'nw')}${perDay != null && perDay > 0 ? `<span class="muted">about ${fmtGp(perDay)} a day</span>` : ''}</div>
+      <div class="pg-bar">
+        <i class="b-gold" style="width:${share(P.gold)}%" title="Gold ${fmtGp(P.gold)}"></i><i class="b-bank" style="width:${share(P.bank)}%" title="Bank ${fmtGp(P.bank)}"></i><i class="b-gear" style="width:${share(P.gear)}%" title="Gear ${fmtGp(P.gear)}"></i><i class="b-inv" style="width:${share(P.invested)}%" title="Invested ${fmtGp(P.invested)}"></i>
+      </div>
+      <div class="pg-legend">
+        <span><b class="b-gold"></b>Gold ${fmtGp(P.gold)}</span>
+        <span><b class="b-bank"></b>Bank ${fmtGp(P.bank)}</span>
+        <span><b class="b-gear"></b>Gear worn ${fmtGp(P.gear)}</span>
+        <span><b class="b-inv"></b>Invested ${fmtGp(P.invested)} <small class="muted">(shop upgrades ${fmtGp(P.shop)}, farm plots ${fmtGp(P.plots)})</small></span>
+      </div>
+      <p class="muted pg-note">Everything you own at what it sells for, plus what you've put into permanent upgrades and plots. The game doesn't show this anywhere, and it's the best single measure of how far an account has come.</p>
+    </div>
+    <div class="pg-grid">
+      ${tile(g.skills.CompletionLog?.i || skillIcon('Woodcutting'), 'Total level', fmtNum(P.totalLevel), `${Math.round(P.pct * 100)}% of the way to 99 everywhere`, delta(P.totalLevel, 'tl', fmtNum), 'data-gotab="train"')}
+      ${tile(g.skills.Quests?.i, 'Quests', `${P.questsDone}<small> / ${P.questsTotal}</small>`, 'done', delta(P.questsDone, 'q', fmtNum), 'data-gotab="quests"')}
+      ${P.collection ? tile(g.skills.Bank?.i, 'Collection', `${fmtNum(P.collection.have)}<small> / ${fmtNum(P.collection.total)}</small>`, 'items found', delta(P.collection.have, 'col', fmtNum), 'data-gotab="bank"') : ''}
+      ${tile(g.skills.Smithing?.i || skillIcon('Smithing'), 'Guild ranks', `${P.ranks}<small> / ${P.rankTotal}</small>`, 'mastery guild ranks reached', delta(P.ranks, 'gr', fmtNum), 'data-gotab="train"')}
+      ${tile(g.currencies.GoldPieces, 'Earning power', fmtGp(P.earn), 'gp/hr, sustainable from scratch', delta(P.earn, 'earn'), 'data-gotab="money"')}
+    </div>
+  </section>`;
+}
+
 // ---------------------------------------------------------------- overview
 const listWords = (a) => (a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1]);
 
@@ -1181,6 +1234,7 @@ function viewOverview() {
       ${r.best ? `Right now <b>${esc(r.best.m.n)}</b> pays the most (<b class="gold">${fmtGp(r.best.gph)}/hr</b>${r.best.src === 'bank' ? ', from your bank' : ''})` : ''}${r.afk ? `; left alone for 8 hours, ${esc(r.afk.m.n)} makes ${fmtGp(r.afk.total)}` : ''}${r.farmGph > 0 ? `; your farm adds ${fmtGp(r.farmGph)}/hr on top` : ''}.</p>
   </section>
 
+  ${progressSection()}
   ${r.alerts.length ? `<section class="ov-sec"><h3>Right now</h3><div class="ov-alerts">${r.alerts.map((a) => `<button class="ov-alert" ${alertTarget(a)}>${img(alertIcon[a.kind], '', 22)}<span>${esc(a.text)}</span>${svg.arrow || '→'}</button>`).join('')}</div></section>` : ''}
 
   <section class="ov-sec">
@@ -1447,7 +1501,7 @@ async function openCard() {
   const canvas = $('#card-canvas');
   await drawCard(canvas, {
     name: s.header.name, mode: s.header.gamemode && !/^(Standard|Test)$/.test(s.header.gamemode) ? s.header.gamemode : '', totalLevel: s.header.totalLevel,
-    bank: e.bankValue().total, gold: s.wallet?.GoldPieces ?? s.header.gp ?? 0,
+    bank: e.bankValue().total, gold: s.wallet?.GoldPieces ?? s.header.gp ?? 0, worth: e.progress().worth, invested: e.progress().invested,
     best: best ? { name: best.m.n, gph: best.gph, icon: methodIcon(best.m) } : null,
     farm: e.farmPlan?.()?.gph || 0, quests: Object.values(s.quests || {}).filter((q) => q.state >= 2).length,
     skills, next, url: location.origin + location.pathname, saved: s.header.timestamp ? relTime(s.header.timestamp) : '', fmtGp, goldIcon: g.currencies.GoldPieces,

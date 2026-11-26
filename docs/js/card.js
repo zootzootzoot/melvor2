@@ -84,8 +84,8 @@ export async function drawCard(canvas, d) {
 
   // stat tiles (right)
   const tiles = [
-    ['BEST RIGHT NOW', d.best ? d.fmtGp(d.best.gph) : '—', d.best ? `gp/hr · ${d.best.name}` : '', true],
-    ['BANK VALUE', d.fmtGp(d.bank), `${d.fmtGp(d.gold)} gold in wallet`],
+    d.worth != null ? ['NET WORTH', d.fmtGp(d.worth), `bank ${d.fmtGp(d.bank)} · invested ${d.fmtGp(d.invested || 0)}`, true] : ['BANK VALUE', d.fmtGp(d.bank), `${d.fmtGp(d.gold)} gold in wallet`, true],
+    ['BEST RIGHT NOW', d.best ? d.fmtGp(d.best.gph) : '—', d.best ? `gp/hr · ${d.best.name}` : ''],
     ['FARM', d.farm > 0 ? d.fmtGp(d.farm) : '—', d.farm > 0 ? 'gp/hr on the best crops' : 'no plots yet'],
   ];
   const tx = 680, tw = 464, th = 92;
@@ -101,7 +101,8 @@ export async function drawCard(canvas, d) {
     ctx.font = `800 40px ${DISPLAY}`; ctx.fillStyle = hero ? C.gold1 : C.text; ctx.fillText(value, tx + 22, y + 74);
     const vw = ctx.measureText(value).width;
     ctx.font = `500 16px ${SANS}`; ctx.fillStyle = C.text2; ctx.fillText(fit(ctx, sub, tw - vw - 60), tx + 36 + vw, y + 72);
-    if (hero && bestIcon) ctx.drawImage(bestIcon, tx + tw - 58, y + 18, 40, 40);
+    if (label === 'BEST RIGHT NOW' && bestIcon) ctx.drawImage(bestIcon, tx + tw - 58, y + 18, 40, 40);
+    if (hero && goldIcon) ctx.drawImage(goldIcon, tx + tw - 54, y + 22, 32, 32);
   });
 
   // next step
