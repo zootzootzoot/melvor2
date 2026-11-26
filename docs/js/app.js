@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=202611260425';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260425';
-import { drawCard } from './card.js?v=202611260425';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260425';
+import { decodeSave } from './save.js?v=202611260427';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260427';
+import { drawCard } from './card.js?v=202611260427';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260427';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -676,6 +676,9 @@ function fightFacts(x, r) {
   const notes = [];
   if (f.triangle) notes.push(`${f.triangle > 0 ? '+' : ''}${fmtPct(f.triangle, 0)} max hit from the combat triangle (${esc(l?.style || '')} vs ${esc(f.enemyStyle)})`);
   if (f.element) notes.push(`${f.element > 0 ? '+' : ''}${fmtPct(f.element, 0)} max hit from elements`);
+  const en = G().combat.enemies[x.m.x?.e];
+  if (en?.atk?.length) notes.push(`special attacks counted (${en.atk.map(([c, a]) => `${esc(a.n)} ${Math.round(c * 100)}%`).join(', ')}): ${fmtPct(f.specialShare || 0, 0)} of the damage you take`);
+  if (en?.pas?.length) notes.push(`passives not modelled: ${en.pas.map(esc).join(', ')}`);
   return `<div class="fact wide"><div class="k">Best loadout from your gear ${l ? styleTag(l.style) : ''}</div>${loadoutIcons(l, 26)}${notes.length ? `<div class="muted" style="font-size:12px;margin-top:6px">${notes.join(' · ')}</div>` : ''}</div>
   <div class="fact wide"><div class="k">The fight</div><div class="fight">
     <span><small>Your stance</small><b>${esc(st?.n || f.stance)}</b></span>

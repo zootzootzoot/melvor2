@@ -577,6 +577,29 @@ def main():
                 "gp": next(([x.get("MinQuantity", 0), x.get("MaxQuantity", 0)] for x in dr.get("FixedCurrencies") or [] if short(x["Currency"]) == "GoldPieces"), None),
                 "cur": [[short(x["Currency"]), x.get("MinQuantity", 0), x.get("MaxQuantity", 0)] for x in dr.get("FixedCurrencies") or [] if short(x["Currency"]) != "GoldPieces"]}
 
+    # special attacks: chance per attack turn, hits (count, formula, percent), whether they can miss,
+    # and damage-over-time / stun riders (DoT total as a fraction of the attacker's max hit)
+    dots = {d["Id"]: d for d in O.get("DamageOverTimeEffect") or []}
+    attacks = {}
+    for a in O.get("Attack") or []:
+        hits = []
+        for h in a.get("Hits") or []:
+            for dm in h.get("Damage") or []:
+                f = dm.get("Formula") or {}
+                kind = {"NormalDamage": "n", "MaxHit": "m", "CurrentHitpoints": "hp"}.get(short(f.get("Type")), "n")
+                hits.append([h.get("Count", 1), kind, (f.get("Data") or {}).get("Percent", 1)])
+        dot = stun = 0.0
+        for e in (a.get("OnHitEffects") or []) + (a.get("PreHitEffects") or []):
+            t = short((e.get("Effect") or {}).get("Type"))
+            data = (e.get("Effect") or {}).get("Data") or {}
+            if t == "DamageOverTime":
+                dd = dots.get(short(data.get("Effect")))
+                if dd and short(((dd.get("DamagePerProc") or {}).get("Formula") or {}).get("Type")) == "MaxHit":
+                    dot += e.get("Chance", 1) * dd.get("ProcCount", 1) * (dd["DamagePerProc"]["Formula"].get("Data") or {}).get("Percent", 0)
+            elif t == "Stun":
+                stun = max(stun, e.get("Chance", 1))
+        attacks[a["Id"]] = {"n": a["DisplayName"], "hits": hits, "av": bool(a.get("IsAvoidable", True)), "dot": round(dot, 4), "stun": stun}
+    passives = {p["Id"]: p["DisplayName"] for p in O.get("CombatPassive") or []}
     for en in O["Enemy"]:
         st = en.get("Stats") or {}
         combat["enemies"][en["Id"]] = {
@@ -587,6 +610,8 @@ def main():
             "prot": sum(x["Value"] for x in st.get("ProtectionRatings") or []),
             "stances": [[short(x["Stance"]), x.get("Weight", 1)] for x in en.get("Stances") or []],
             "drops": drops_of(en.get("Drops")), "special": bool(en.get("Attacks") or en.get("Passives")), "el": short(en.get("Element")),
+            "atk": [[x.get("Chance", 0), attacks[short(x["Attack"])]] for x in en.get("Attacks") or [] if short(x.get("Attack")) in attacks],
+            "pas": [passives.get(short(p), short(p)) for p in en.get("Passives") or []],
             "r": reqs_of(en.get("Requirements")),
         }
     combat["spells"] = {}

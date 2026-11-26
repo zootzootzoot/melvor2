@@ -51,7 +51,7 @@ export function playerFighter(g, save) {
 }
 
 export function enemyFighter(e) {
-  return { lv: e.lv, st: e.st, pow: Math.max(1, e.pow), prot: e.prot, stances: e.stances, interval: e.st.AttackInterval || 3000, hp: (e.lv.Hitpoints ?? 1) * 10, el: e.el || 'Neutral' };
+  return { lv: e.lv, st: e.st, pow: Math.max(1, e.pow), prot: e.prot, stances: e.stances, interval: e.st.AttackInterval || 3000, hp: (e.lv.Hitpoints ?? 1) * 10, el: e.el || 'Neutral', atk: e.atk || [] };
 }
 
 function rating(C, f, stance, kind) {
@@ -102,19 +102,40 @@ export function fight(C, player, enemy, only = null) {
   const aliveMs = enemy.hp / best.dps;
   const tot = enemy.stances.reduce((a, [, w]) => a + w, 0) || 1;
   const res = Math.min(1, Math.max(0, resistance(enemy.pow, player.prot) * (1 + (tri.ResistanceCombatTriangle || 0))));
-  let inMs = 0, enemyMax = 0;
+  let inMs = 0, enemyMax = 0, specialShare = 0;
+  const arm = player.st.Armour || 0;
+  const specChance = Math.min(1, (enemy.atk || []).reduce((a, [c]) => a + c, 0));
   for (const [stance, w] of enemy.stances) {
     const s = C.stances[stance];
     if (!s) continue;
     const mh = maxHit(C, enemy, s.style);
     const hc = hitChance(rating(C, enemy, stance, 'acc'), rating(C, player, stance, 'eva'));
-    inMs += (w / tot) * hc * avgDamage(mh, res, player.st.Armour || 0) / enemy.interval;
-    enemyMax = Math.max(enemyMax, Math.max(1, Math.floor(mh * (1 - res)) - (player.st.Armour || 0)));
+    const normal = hc * avgDamage(mh, res, arm);
+    let turn = (1 - specChance) * normal;
+    let burst = Math.max(1, Math.floor(mh * (1 - res)) - arm);
+    // special attacks: each hit is a share of a normal roll or of max hit; damage over time comes from max hit, after the hit lands
+    for (const [c, a] of enemy.atk || []) {
+      const land = a.av ? hc : 1;
+      let dmg = 0, top = 0;
+      for (const [n, kind, pct] of a.hits) {
+        if (kind === 'hp' || pct <= 0) continue;
+        const per = kind === 'm' ? Math.max(1, Math.floor(mh * pct * (1 - res)) - arm) : avgDamage(Math.floor(mh * pct), res, arm);
+        dmg += n * land * per;
+        top += n * (kind === 'm' ? per : Math.max(1, Math.floor(mh * pct * (1 - res)) - arm));
+      }
+      dmg += land * a.dot * mh;
+      turn += c * dmg;
+      specialShare += (w / tot) * c * dmg;
+      burst = Math.max(burst, top);
+    }
+    inMs += (w / tot) * turn / enemy.interval;
+    enemyMax = Math.max(enemyMax, burst);
   }
   const xp = (C.stances[best.stance].xp || []).map(([sk, per]) => [sk, per * enemy.hp]);
   return {
     ...best, aliveMs, killMs: aliveMs + SPAWN_MS, takenPerKill: inMs * aliveMs, enemyMax, danger: enemyMax / player.hp,
     attacks: aliveMs / player.interval, xp, triangle: tri.MaxHitCombatTriangle || 0, element: elem, enemyStyle: eStyle,
+    specials: (enemy.atk || []).length, specialShare: inMs > 0 ? (specialShare / enemy.interval) / inMs : 0,
   };
 }
 

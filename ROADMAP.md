@@ -3,6 +3,7 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Enemy special attacks in combat damage and safety (hits, damage over time, burst danger)
 - Share card: profile image (PNG) to copy or download
 - Multiple characters: saves kept per character, switch from the top bar, side-by-side comparison
 - Items & recipes browser: every item and recipe with values, costs to make or buy, sources, uses, filters and sorting
@@ -33,4 +34,4 @@ What players would pay for, ordered by value versus effort. Done items stay list
 - Guild task planner: every task with live progress, time estimates, and the fastest set of tasks to the next rank (in Training)
 
 ## Up next, in order
-1. **Combat, part 3.** Enemy special attacks and passives, prayers.
+1. **Combat, part 3.** Enemy passives and prayers.
