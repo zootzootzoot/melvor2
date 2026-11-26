@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611260422';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260422';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260422';
+import { decodeSave } from './save.js?v=202611260423';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260423';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260423';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -9,6 +9,18 @@ const topRight = $('#topbar-right');
 const STORE_KEY = 'melvor-ledger:save';
 const PREF_KEY = 'melvor-ledger:prefs';
 const HIST_KEY = 'melvor-ledger:history:';
+const CHARS_KEY = 'melvor-ledger:chars';
+
+/** Every character you've imported on this device: uuid -> { name, mode, t, tl, gp, s (save string) }. */
+function loadChars() { try { return JSON.parse(localStorage.getItem(CHARS_KEY)) || {}; } catch { return {}; } }
+function storeChars(c) {
+  try { localStorage.setItem(CHARS_KEY, JSON.stringify(c)); return true; } catch {
+    // quota: drop the oldest other characters' save strings until it fits
+    const keys = Object.keys(c).sort((a, b) => (c[a].t || 0) - (c[b].t || 0));
+    for (const k of keys) { if (c[k].s && k !== state.save?.header?.uuid) { delete c[k].s; try { localStorage.setItem(CHARS_KEY, JSON.stringify(c)); return true; } catch { /* keep trimming */ } } }
+    return false;
+  }
+}
 
 const MODES = {
   best: { label: 'Best overall', desc: 'Whichever pays more: making it from scratch, or using what is already in your bank' },
@@ -91,13 +103,25 @@ async function loadSave(input, { quiet = false } = {}) {
   const save = await decodeSave(input);
   state.save = save; state.explorer = false;
   applyPlayer();
-  if (typeof input === 'string') { try { localStorage.setItem(STORE_KEY, input.trim()); } catch { /* quota */ } }
+  let str = null;
+  if (typeof input === 'string') str = input.trim();
   else {
     try {
       const bytes = new Uint8Array(input); let s = '';
       for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-      localStorage.setItem(STORE_KEY, btoa(s));
+      str = btoa(s);
     } catch { /* ignore */ }
+  }
+  if (str) {
+    try { localStorage.setItem(STORE_KEY, str); } catch { /* quota */ }
+    const chars = loadChars();
+    const h = save.header;
+    const t = h.timestamp?.getTime?.() || Date.now();
+    // keep the newest save per character
+    if (!chars[h.uuid] || (chars[h.uuid].t || 0) <= t || !chars[h.uuid].s) {
+      chars[h.uuid] = { name: h.name, mode: h.gamemode, t, tl: h.totalLevel, gp: save.wallet?.GoldPieces ?? h.gp ?? 0, s: str };
+      storeChars(chars);
+    }
   }
   state.history = recordHistory(save);
   if (!quiet) toast(save.problems?.length ? `Loaded ${save.header.name}'s save, but couldn't read: ${save.problems.join(', ')}. The game may have updated; those parts are left empty.` : `Loaded ${save.header.name}'s save`);
@@ -256,8 +280,10 @@ function renderDashboard() {
     <button class="btn btn-ghost btn-sm search-btn" id="open-search" aria-label="Search items (Ctrl+K)">${svg.search}<span>Search items</span><span class="kbd">Ctrl K</span></button>
     <div class="char-chip">
       <div class="who"><b>${esc(s.header.name)}</b><span>${state.explorer ? 'Explorer mode' : `Total level ${fmtNum(s.header.totalLevel)}`}</span></div>
+      ${state.explorer ? '' : `<button class="btn btn-ghost btn-sm" id="open-chars" title="Switch or compare characters">${Object.keys(loadChars()).length > 1 ? `${Object.keys(loadChars()).length} characters` : 'Characters'}</button>`}
       <button class="btn btn-sm" id="reimport">${state.explorer ? 'Import save' : 'New save'}</button>
     </div>`;
+  const oc = $('#open-chars'); if (oc) oc.onclick = () => openChars();
   $('#reimport').onclick = () => { localStorage.removeItem(STORE_KEY); state.save = null; history.replaceState(null, '', location.pathname); renderLanding(); };
   $('#open-search').onclick = () => openPalette();
 
@@ -1233,6 +1259,69 @@ function potionSection() {
       <div class="pot-k"><small>net gold</small><b class="num ${x.net > 0 ? 'gold' : 'red'}">${fmtGp(x.net, { sign: true })}</b></div>
     </div>`;
   }).join('')}</div>`;
+}
+
+// ---------------------------------------------------------------- characters
+function openChars() {
+  const d = $('#chars');
+  const chars = loadChars();
+  const cur = state.save?.header?.uuid;
+  const list = Object.entries(chars).sort((a, b) => (b[1].t || 0) - (a[1].t || 0));
+  d.innerHTML = `<div class="ch-head"><h3>Characters</h3><button class="btn btn-ghost btn-sm" data-close aria-label="Close">${svg.close || '✕'}</button></div>
+    <p class="muted" style="margin:0 0 10px;font-size:13px">Every save you import is kept on this device, one per character (the newest wins). Nothing is uploaded.</p>
+    <div class="ch-list">${list.map(([id, c]) => `<div class="ch-row ${id === cur ? 'on' : ''}">
+      <span class="ch-main"><b>${esc(c.name)}</b><small>${esc(c.mode || 'Standard')} · total level ${fmtNum(c.tl || 0)} · ${fmtGp(c.gp || 0)} gold · saved ${esc(relTime(new Date(c.t)))}</small></span>
+      ${id === cur ? '<span class="pill green">open</span>' : c.s ? `<button class="btn btn-sm" data-ch-open="${esc(id)}">Open</button>` : '<span class="pill">re-import to open</span>'}
+      <button class="btn btn-ghost btn-sm" data-ch-del="${esc(id)}" title="Forget this character on this device">Remove</button>
+    </div>`).join('') || '<div class="muted">No characters yet.</div>'}</div>
+    <div class="ch-actions"><button class="btn btn-sm" id="ch-add">Import another character</button>${list.filter(([, c]) => c.s).length > 1 ? '<button class="btn btn-sm btn-gold" id="ch-compare">Compare</button>' : ''}</div>
+    <div id="ch-cmp"></div>`;
+  d.showModal();
+  d.onclick = async (ev) => {
+    if (ev.target === d || ev.target.closest('[data-close]')) { d.close(); return; }
+    const o = ev.target.closest('[data-ch-open]'), del = ev.target.closest('[data-ch-del]');
+    if (o) { const c = loadChars()[o.dataset.chOpen]; d.close(); if (c?.s) { try { await loadSave(c.s); } catch (err) { toast(err.message); } } return; }
+    if (del) {
+      const all = loadChars(); delete all[del.dataset.chDel]; storeChars(all);
+      try { localStorage.removeItem(HIST_KEY + del.dataset.chDel); } catch { /* ignore */ }
+      if (del.dataset.chDel === cur) { d.close(); localStorage.removeItem(STORE_KEY); state.save = null; renderLanding(); return; }
+      return openChars();
+    }
+    if (ev.target.closest('#ch-add')) { d.close(); localStorage.removeItem(STORE_KEY); state.save = null; history.replaceState(null, '', location.pathname); renderLanding(); return; }
+    if (ev.target.closest('#ch-compare')) { $('#ch-cmp').innerHTML = '<div class="muted" style="padding:10px 0">Working out each character…</div>'; setTimeout(() => compareChars(), 30); }
+  };
+}
+
+async function compareChars() {
+  const chars = Object.entries(loadChars()).filter(([, c]) => c.s).sort((a, b) => (b[1].tl || 0) - (a[1].tl || 0)).slice(0, 6);
+  const cols = [];
+  for (const [id, c] of chars) {
+    try {
+      const sv = id === state.save?.header?.uuid ? state.save : await decodeSave(c.s);
+      const eng = id === state.save?.header?.uuid ? E() : new Engine(state.game);
+      if (eng !== E()) eng.setPlayer(sv, { useMods: true });
+      const best = eng.ranked('best')[0];
+      const xpBest = Object.fromEntries([...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k)), ...COMBAT_SKILLS].map((k) => [k, sv.skills[k]?.level ?? 1]));
+      cols.push({ id, c, sv, best, bank: eng.bankValue().total, lv: xpBest, quests: Object.values(sv.quests || {}).filter((q) => q.state >= 2).length, farm: eng.farmPlan?.()?.gph || 0 });
+    } catch { /* skip unreadable */ }
+  }
+  if (!cols.length) { $('#ch-cmp').innerHTML = ''; return; }
+  const maxOf = (f) => Math.max(...cols.map(f));
+  const cell = (v, best, fmt) => `<td class="num ${cols.length > 1 && v === best && v > 0 ? 'gold' : ''}">${fmt(v)}</td>`;
+  const row = (label, f, fmt = fmtGp) => { const b = maxOf(f); return `<tr><th>${label}</th>${cols.map((x) => cell(f(x), b, fmt)).join('')}</tr>`; };
+  const skills = Object.keys(cols[0].lv);
+  $('#ch-cmp').innerHTML = `<div class="ch-cmp"><table>
+    <thead><tr><th></th>${cols.map((x) => `<th>${esc(x.c.name)}</th>`).join('')}</tr></thead>
+    <tbody>
+      ${row('Total level', (x) => x.sv.header.totalLevel, fmtNum)}
+      ${row('Gold', (x) => x.sv.wallet?.GoldPieces ?? x.sv.header.gp ?? 0)}
+      ${row('Bank value', (x) => x.bank)}
+      ${row('Best gp/hr', (x) => x.best?.gph || 0)}
+      <tr><th>Best method</th>${cols.map((x) => `<td>${esc(x.best?.m.n || '—')}</td>`).join('')}</tr>
+      ${row('Farm gp/hr', (x) => x.farm)}
+      ${row('Quests done', (x) => x.quests, fmtNum)}
+      ${skills.map((k) => row(`${img(skillIcon(k), '', 14)} ${k}`, (x) => x.lv[k], fmtNum)).join('')}
+    </tbody></table></div>`;
 }
 
 // ---------------------------------------------------------------- item & recipe browser

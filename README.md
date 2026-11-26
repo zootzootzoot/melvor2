@@ -4,7 +4,7 @@ A companion for **Melvor Idle 2**. Paste the save string from the game's main me
 
 **Live site: https://zootzootzoot.github.io/melvor2/**
 
-Everything runs in the browser. Your save is decoded locally and never uploaded. The last import, and a small history of previous imports used for "since last time" progress, stay in `localStorage` on your own device.
+Everything runs in the browser. Your save is decoded locally and never uploaded. The latest save of each character you import, and a small history of previous imports used for "since last time" progress, stay in `localStorage` on your own device.
 
 ## Features
 
@@ -25,6 +25,7 @@ Everything runs in the browser. Your save is decoded locally and never uploaded.
 - **Next unlocks.** The most lucrative methods you're a few levels away from, with the XP and estimated time to get there.
 - **Items & recipes.** A browser for every item and recipe in the game. Filter items by category (equipment, weapons, food, chests, traps, compost) and by the skill that makes them, or show only what's in your bank. Each item shows its sell value, what it costs you to make (your time valued at your best rate) or buy, how many recipes use it, and how many you have. Recipes show inputs and products, gold/hr and XP/hr (at the level they unlock, if you can't do them yet) and what's missing. Sort by value, profit to make, bank value, uses or name. Works in the level-99 explorer too.
 - **Item lookup** (Ctrl K, or click any item icon). Where an item comes from, what it's used for, its value, how much you have, and what it does when equipped.
+- **Characters.** Every save you import is kept on this device, one per character (the newest save wins). Switch between them from the top bar, remove one, or compare up to six side by side: total level, gold, bank value, best gold/hr and method, farm income, quests done, and every skill level, with the leader in each row highlighted.
 - **Copy summary.** One click copies your best money maker, best idle action and next upgrade, ready to paste into Discord.
 - **Collection** (in Bank). Items you've found against all items, per source skill, with the quickest missing items to get at your rates and what's blocking the rest.
 - **Your pace** (in Plan). With two or more imports, your total level and wealth over time, XP per day per skill, and when you'll reach each next milestone.
