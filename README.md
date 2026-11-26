@@ -65,7 +65,7 @@ It also unwraps item icons from Godot `GST2` textures, which hold lossless WebP 
 
 Only shop purchases registered in the Shop entity config count as buyable. Some purchases are defined in the data but never sold.
 
-## Save format (Alpha 0.11.5.5, save version 31)
+## Save format (Alpha 0.11.7, save version 32)
 
 - Save string = `Base64(file bytes)`, the same bytes as `%APPDATA%\Games By Malcs\Melvor Idle 2\steam\<id>\saves\save_<uuid>.sav`.
 - The file is a **Brotli** stream. The game flushes it without closing it, so it has no final block. A streaming decoder must accept "needs more input" at the end.
@@ -73,7 +73,7 @@ Only shop purchases registered in the Shop entity config count as buyable. Some 
   - `int32 version`, then the header: GUID, character name, gamemode, timestamp, active action, total level, GP, slayer coins, demo flag.
   - `int32 entityCount`, then for each entity: `string id`, `int32 regionLength`, `int32 componentCount`, and for each component `string id`, `int32 length`, `bytes`.
   - The parts this site reads:
-    - `Bank/Inventory`: tabs of item stacks (`int32 qty, bool placeholder, bool locked, string item`).
+    - `Bank/Inventory`: tabs of item stacks (`int32 qty, bool placeholder, bool locked, string item`), then the tab label, tag list and (from save version 32) `bool hasIcon [string item]`.
     - `Bank/Wallet`: `int64 qty, string currency`.
     - `Shop/Shop`: purchase counts.
     - `<Skill>/Experience`: `double xp`.

@@ -2,7 +2,7 @@
 // Save string = Base64( Brotli( SaveWriter stream ) ). The game flushes the Brotli
 // stream without closing it, so the stream is "truncated" by design: we decode
 // with a streaming decoder and accept NeedsMoreInput at the end.
-import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611250032';
+import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611260410';
 
 let brotliReady = null;
 /** For Node tests: initialise the decoder from wasm bytes instead of fetching it. */
@@ -120,6 +120,7 @@ function readBank(bytes, comp, version) {
       const tc = r.i32();
       for (let k = 0; k < tc; k++) { r.bool(); r.bool(); r.str(); }
     }
+    if (version >= 32 && r.bool()) r.str(); // Alpha 0.11.7: optional tab icon item
   }
   return items;
 }
@@ -256,9 +257,12 @@ export async function decodeSave(input) {
       skills[id] = { xp, level: levelFromXp(xp) };
     }
   }
-  const bank = ents.Bank?.Inventory ? readBank(raw, ents.Bank.Inventory, header.version) : {};
-  const wallet = ents.Bank?.Wallet ? readWallet(raw, ents.Bank.Wallet) : {};
-  const shop = ents.Shop?.Shop ? readShop(raw, ents.Shop.Shop) : {};
+  // each section is read on its own, so a format change in one doesn't block the whole import
+  const problems = [];
+  const safe = (what, fn, fallback) => { try { return fn(); } catch (e) { problems.push(what); console.warn('save: could not read ' + what, e); return fallback; } };
+  const bank = ents.Bank?.Inventory ? safe('bank', () => readBank(raw, ents.Bank.Inventory, header.version), {}) : {};
+  const wallet = ents.Bank?.Wallet ? safe('wallet', () => readWallet(raw, ents.Bank.Wallet), {}) : {};
+  const shop = ents.Shop?.Shop ? safe('shop', () => readShop(raw, ents.Shop.Shop), {}) : {};
   const tools = {};
   for (const comps of Object.values(ents)) {
     if (comps.Toolbelt) { try { readToolbelt(raw, comps.Toolbelt, tools); } catch { /* tolerate */ } }
@@ -360,5 +364,6 @@ export async function decodeSave(input) {
   stats.all = {};
   for (const kind of ['items', 'currencies', 'enemies', 'dungeons', 'styles', 'effects', 'prayers']) for (const [k, v] of Object.entries(stats[kind])) stats.all[k] = { ...(stats.all[k] || {}), ...v };
   const components = Object.fromEntries(Object.entries(ents).map(([k, v]) => [k, Object.keys(v)]));
-  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, quests, slayer, astro, entities: Object.keys(ents), components };
+  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, quests, slayer, astro, problems, entities: Object.keys(ents), components };
 }
+export { brotliDecode as _brotliDecode, Reader as _Reader, readHeader as _readHeader, readEntities as _readEntities };

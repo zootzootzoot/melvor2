@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611250032';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611250032';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611250032';
+import { decodeSave } from './save.js?v=202611260410';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260410';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260410';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -99,7 +99,7 @@ async function loadSave(input, { quiet = false } = {}) {
     } catch { /* ignore */ }
   }
   state.history = recordHistory(save);
-  if (!quiet) toast(`Loaded ${save.header.name}'s save`);
+  if (!quiet) toast(save.problems?.length ? `Loaded ${save.header.name}'s save, but couldn't read: ${save.problems.join(', ')}. The game may have updated; those parts are left empty.` : `Loaded ${save.header.name}'s save`);
   state.open.clear(); state.limit = 30;
   const h = parseHash();
   if (h.tab) { state.tab = h.tab; if (h.tab === 'train' && h.arg) state.trainSkill = h.arg; }

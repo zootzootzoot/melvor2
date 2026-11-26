@@ -785,7 +785,7 @@ def main():
 
     game = {
         "v": 1,
-        "gameVersion": "Alpha 0.11.5.5 (save v31)",
+        "gameVersion": "Alpha 0.11.7 (save v32)",
         "items": items, "buy": buy, "shop": shop, "methods": methods, "skills": skills, "currencies": cur_icons,
         "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat, "quests": quests, "astro": astro,
     }
