@@ -953,6 +953,7 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 
 .goal-pick { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 14px; margin: 18px 0 4px; }
 .goal-pick > .muted { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; }
+.goal-pick input#goal-item { padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line-strong); background: #12141c; color: var(--text); min-width: 260px; font: inherit; }
 .goal-pick select { padding: 7px 12px; border-radius: 999px; border: 1px solid var(--line-strong); background: #12141c; color: var(--text); max-width: 340px; }
 .goal-hero { grid-template-columns: auto auto auto; justify-content: start; }
 .goal-hero .ph-k b { font-size: 28px; }
@@ -1072,3 +1073,6 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 /* share card */
 .card-dlg { width: min(980px, calc(100vw - 32px)); }
 .card-canvas { width: 100%; height: auto; border-radius: 14px; display: block; box-shadow: 0 20px 60px -20px rgba(0, 0, 0, .8); }
+
+.dr-plan { margin: 12px 0 4px; }
+.note.warn { border-color: rgba(255, 196, 120, .35); }

@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=202611260427';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260427';
-import { drawCard } from './card.js?v=202611260427';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260427';
+import { decodeSave } from './save.js?v=202611260432';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260432';
+import { drawCard } from './card.js?v=202611260432';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260432';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -924,6 +924,7 @@ const KIND = {
   unlock: { label: 'Unlock', cls: 'k-unlock' }, shop: { label: 'Upgrade', cls: 'k-shop' },
   gear: { label: 'Gear', cls: 'k-gear' }, quest: { label: 'Quest', cls: 'k-quest' },
   train: { label: 'Train', cls: 'k-unlock' }, guild: { label: 'Guild', cls: 'k-quest' }, kill: { label: 'Kill', cls: 'k-gear' }, astro: { label: 'Astrology', cls: 'k-quest' },
+  make: { label: 'Gather / make', cls: 'k-unlock' }, buy: { label: 'Buy', cls: 'k-shop' }, have: { label: 'From your bank', cls: 'k-quest' },
 };
 
 function goalPicker() {
@@ -937,9 +938,10 @@ function goalPicker() {
   for (const m of locked) { const k = m.s === 'Combat' ? 'Dungeons' : m.s; if (!bySkill.has(k)) bySkill.set(k, []); bySkill.get(k).push(m); }
   return `<div class="goal-pick panel">
     <span class="muted">Goal</span>
-    <div class="seg">${[['gold', 'Earn more gold'], ['quest', 'A quest'], ['level', 'A level'], ['unlock', 'An unlock']].map(([k, l]) => `<button data-goaltype="${k}" aria-pressed="${g.type === k}">${l}</button>`).join('')}</div>
+    <div class="seg">${[['gold', 'Earn more gold'], ['quest', 'A quest'], ['level', 'A level'], ['unlock', 'An unlock'], ['item', 'An item']].map(([k, l]) => `<button data-goaltype="${k}" aria-pressed="${g.type === k}">${l}</button>`).join('')}</div>
     ${g.type === 'quest' ? `<select id="goal-quest">${quests.map((q) => `<option value="${esc(q.id)}" ${g.id === q.id ? 'selected' : ''}>${esc(q.Q.n)} (${esc(q.Q.cat)})</option>`).join('')}</select>` : ''}
     ${g.type === 'level' ? `<select id="goal-skill">${skills.map((k) => `<option ${g.skill === k ? 'selected' : ''}>${k}</option>`).join('')}</select><label class="lvl-in"><input type="number" id="goal-level" min="2" max="99" value="${g.level || Math.min(99, e.level(g.skill || skills[0]) + 10)}"/></label>` : ''}
+    ${g.type === 'item' ? `<input id="goal-item" list="goal-items" placeholder="Type an item, e.g. Rune Platebody" value="${esc(g.id ? E().name(g.id) : '')}" autocomplete="off"/><datalist id="goal-items">${Object.values(G().items).map((it) => `<option value="${esc(it.n)}"></option>`).join('')}</datalist><label class="lvl-in"><span class="sr">Quantity</span><input type="number" id="goal-qty" min="1" value="${g.qty || 1}"/></label>` : ''}
     ${g.type === 'unlock' ? `<select id="goal-unlock">${[...bySkill.entries()].map(([sk, ms]) => `<optgroup label="${esc(sk)}">${ms.map((m) => `<option value="${esc(m.id)}" ${g.id === m.id ? 'selected' : ''}>${esc(m.n)}${m.s === 'Combat' ? '' : ` (lvl ${m.lv})`}</option>`).join('')}</optgroup>`).join('')}</select>` : ''}
   </div>`;
 }
@@ -947,11 +949,12 @@ function goalPicker() {
 function goalView() {
   const e = E();
   const g = state.goal;
+  if (g.type === 'item' && !g.id) return `<div class="note">${svg.info}<span>Type the item you want. The route resolves everything behind it: which skill, enemy, chest or shop it comes from, the levels, quests and kills those need, every material along the way (from your bank first), and the gold to buy what's cheaper to buy.</span></div>`;
   const r = e.goalRoute(g);
   const step = (st, i) => {
     const k = KIND[st.kind] || KIND.unlock;
-    const icon = st.kind === 'train' || st.kind === 'guild' ? skillIcon(st.skill) : st.kind === 'quest' ? G().skills.Quests?.i : st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'kill' ? G().combat.enemies[st.enemy]?.i : G().shop[st.id.slice(2)]?.i;
-    const target = st.kind === 'kill' ? 'data-gotab="money"' : st.kind === 'train' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${st.level}"` : st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'guild' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${e.level(st.skill) + 1}"` : st.kind === 'shop' ? 'data-gotab="upgrades"' : `data-item="${esc(st.m?.primary || '')}"`;
+    const icon = st.kind === 'train' || st.kind === 'guild' ? skillIcon(st.skill) : st.kind === 'quest' ? G().skills.Quests?.i : st.kind === 'unlock' || st.kind === 'make' ? (st.m.i || itemIcon(st.item)) : st.kind === 'kill' ? G().combat.enemies[st.enemy]?.i : st.kind === 'buy' || st.kind === 'have' ? itemIcon(st.items?.[0]?.[0]) : st.id === 'gold' ? G().currencies.GoldPieces : G().shop[st.id.slice(2)]?.i;
+    const target = st.kind === 'kill' ? 'data-gotab="money"' : st.kind === 'make' ? `data-item="${esc(st.item || '')}"` : st.kind === 'buy' || st.kind === 'have' ? `data-item="${esc(st.items?.[0]?.[0] || '')}"` : st.kind === 'train' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${st.level}"` : st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'guild' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${e.level(st.skill) + 1}"` : st.kind === 'shop' ? 'data-gotab="upgrades"' : `data-item="${esc(st.m?.primary || '')}"`;
     return `<li class="ps ${k.cls}"><span class="ps-n num">${i + 1}</span>
       <div class="ps-card panel" role="button" tabindex="0" ${target}>
         <span class="ps-ico">${img(icon, '', 30)}</span>
@@ -964,7 +967,8 @@ function goalView() {
       <div class="ph-arrow">${svg.clock}</div>
       <div class="ph-k"><small>Total play time</small><b class="num gold">${Number.isFinite(r.hours) ? fmtDuration(r.hours) : '—'}${r.unknown ? '+' : ''}</b><span class="muted">${r.steps.length} steps</span></div>
     </div>
-    ${r.steps.length ? `<ol class="psteps stagger">${r.steps.map(step).join('')}</ol>` : `<div class="empty"><b>Already done.</b>Pick another goal.</div>`}`;
+    ${r.notes?.length ? `<div class="note warn">${svg.info}<span>${r.notes.map(esc).join('<br>')}</span></div>` : ''}
+    ${r.steps.length ? `<ol class="psteps stagger">${r.steps.map(step).join('')}</ol>` : r.notes?.length ? '' : `<div class="empty"><b>Already done.</b>Pick another goal.</div>`}`;
 }
 
 function rateChart(plan) {
@@ -1772,11 +1776,12 @@ function openItem(id) {
         <div class="dr-fact"><span class="k">In your bank</span><span><b class="num">${fmtNum(info.have)}</b>${info.have && it.v ? ` · worth ${fmtGp(info.have * it.v)}` : ''}${info.equipped ? ' · <span class="green">equipped</span>' : ''}</span></div>
         ${info.buy ? `<div class="dr-fact"><span class="k">Shop</span><span>${fmtGp(info.buy.price)} gold each (${esc(info.buy.shop?.n || '')})</span></div>` : ''}
         ${make}
-      </div>`}
+      </div>
+      <button class="btn btn-sm btn-gold dr-plan" data-plan-item="${esc(id)}">${svg.target} Plan how to get ${info.have ? 'more' : 'it'}</button>`}
       ${toolFx.length ? `<h4>When equipped</h4><ul class="fx">${toolFx.map((f) => `<li class="${f.good ? 'good' : 'bad'}"><b>${f.val}</b> ${esc(f.label)}${f.where ? ` <span class="muted">· ${esc(f.where)}</span>` : ''}${f.skill ? ` <span class="muted">· ${esc(f.skill)}</span>` : ''}${f.cond ? ' <span class="muted">(conditional)</span>' : ''}</li>`).join('')}</ul>` : ''}
       ${srcRows ? `<h4>How to get it</h4><div class="dr-list">${srcRows}</div>` : ''}
       ${useRows ? `<h4>What it's used for <span class="muted">· value added per hour</span></h4><div class="dr-list">${useRows}</div>` : ''}
-      ${!srcRows && !useRows && !info.buy ? '<p class="muted">Not produced or used by any skill this site models yet (combat drops, quests, hunting and ranching).</p>' : ''}
+      ${!srcRows && !useRows && !info.buy ? '<p class="muted">Not produced or used by anything this site models yet (events and special drops).</p>' : ''}
     </div>`;
   if (!d.open) d.showModal();
   d.focus({ preventScroll: true }); // not the close button, so a held Enter key can't close it
@@ -1856,8 +1861,9 @@ function bindView(v) {
       if (ty === 'gold') state.goal = null;
       else if (ty === 'quest') state.goal = { type: 'quest', id: e.questList().find((q) => !q.done && q.available)?.id || e.questList().find((q) => !q.done)?.id };
       else if (ty === 'level') { const sk = state.trainSkill && !NOT_TRAINABLE.has(state.trainSkill) ? state.trainSkill : 'Fishing'; state.goal = { type: 'level', skill: sk, level: Math.min(99, e.level(sk) + 10) }; }
+      else if (ty === 'item') state.goal = { type: 'item', id: state.goal?.type === 'item' ? state.goal.id : null, qty: state.goal?.qty || 1 };
       else state.goal = { type: 'unlock', id: e.betterUnlocks().list[0]?.m.id || e.methods.find((m) => !m.quest && !e.status(m).unlocked)?.id };
-      if (state.goal && !state.goal.id && ty !== 'level') state.goal = null;
+      if (state.goal && !state.goal.id && ty !== 'level' && ty !== 'item') state.goal = null;
       savePrefs();
       return rerender();
     }
@@ -1897,6 +1903,13 @@ function bindView(v) {
   if (mods) mods.onchange = () => { state.mods = mods.checked; savePrefs(); applyPlayer(); const y = scrollY; renderDashboard(); scrollTo({ top: y }); toast(state.mods ? 'Rates include your upgrades' : 'Showing base rates, without upgrades'); };
   const gq = $('#goal-quest', v); if (gq) gq.onchange = () => { state.goal = { type: 'quest', id: gq.value }; savePrefs(); rerender(); };
   const gu = $('#goal-unlock', v); if (gu) gu.onchange = () => { state.goal = { type: 'unlock', id: gu.value }; savePrefs(); rerender(); };
+  const gi = $('#goal-item', v), gqty = $('#goal-qty', v);
+  if (gi) {
+    const byName = new Map(Object.entries(G().items).map(([id, it]) => [it.n.toLowerCase(), id]));
+    const setItem = () => { const id = byName.get(gi.value.trim().toLowerCase()); if (!id) return; state.goal = { type: 'item', id, qty: Math.max(1, Math.round(Number(gqty?.value) || 1)) }; savePrefs(); rerender(); };
+    gi.onchange = setItem; gi.oninput = () => { if (byName.has(gi.value.trim().toLowerCase())) setItem(); };
+    if (gqty) gqty.onchange = setItem;
+  }
   const gs = $('#goal-skill', v), gl = $('#goal-level', v);
   const setLvl = () => { const lvl = Math.max(2, Math.min(99, Math.round(Number(gl.value)) || 2)); state.goal = { type: 'level', skill: gs.value, level: lvl }; savePrefs(); rerender(); };
   if (gs) gs.onchange = () => { gl.value = Math.min(99, E().level(gs.value) + 10); setLvl(); };
@@ -1929,6 +1942,8 @@ document.addEventListener('keydown', (e) => {
 });
 $('#drawer').addEventListener('click', (e) => {
   if (e.target === e.currentTarget || e.target.closest('[data-close]')) { $('#drawer').close(); return; }
+  const pl = e.target.closest('[data-plan-item]');
+  if (pl) { state.goal = { type: 'item', id: pl.dataset.planItem, qty: Math.max(1, (E().bank[pl.dataset.planItem] || 0) > 0 ? 1 : 1) }; savePrefs(); $('#drawer').close(); go('plan'); return; }
   const it = e.target.closest('[data-item]');
   if (it) openItem(it.dataset.item);
 });

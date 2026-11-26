@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611260427';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611260432';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -98,6 +98,18 @@ export class Engine {
       }
     }
     this.sourceable = new Set(Object.keys(game.buy));
+    // instant conversions the resolver can use: bank upgrades and opening chests
+    this.conversions = new Map();
+    const conv = (it, c) => { if (!this.conversions.has(it)) this.conversions.set(it, []); this.conversions.get(it).push(c); };
+    for (const u of game.upgrades || []) conv(u.out, { kind: 'upgrade', id: 'up:' + u.id, n: `Upgrade to ${this.items[u.out]?.n || u.out}`, per: u.q, in: u.in, gp: u.gp || 0, r: u.r || [] });
+    for (const [id, it] of Object.entries(this.items)) {
+      if (!it.open) continue;
+      const tot = it.open.table.reduce((a, r) => a + r[1], 0) || 1;
+      const ev = new Map();
+      for (const [x, lo, hi] of it.open.fixed) ev.set(x, (ev.get(x) || 0) + (lo + hi) / 2);
+      for (const [x, w, lo, hi] of it.open.table) ev.set(x, (ev.get(x) || 0) + (w / tot) * (lo + hi) / 2);
+      for (const [x, q] of ev) if (q > 0) conv(x, { kind: 'open', id: 'open:' + id, n: `Open ${it.n}`, per: q, in: [[id, 1]], gp: 0, r: [] });
+    }
     let changed = true;
     while (changed) {
       changed = false;
@@ -1639,6 +1651,230 @@ export class Engine {
     return res;
   }
 
+  // ---------------------------------------------------------------- acquiring anything
+  /**
+   * How to get `qty` of an item, resolved across every system: your bank, the shop, or any method in any skill
+   * (gathering, crafting, thieving, enemy drops, dungeons), including ones you haven't unlocked yet. Each source's
+   * requirements (levels, quests, kills, shop purchases) and its inputs are resolved the same way, recursively.
+   * Phase 1 picks the cheapest source per item (time, with gold valued at your best gp/hr); phase 2 expands the
+   * choice into one plan: bank stock used once across the whole tree, by-products kept for later steps, training merged
+   * per skill (and reduced by the XP the plan's own steps give), and production steps in the order they're needed.
+   */
+  acquire(target, qty = 1) {
+    const key = 'acq|' + target + '|' + qty;
+    if (this._cache.has(key)) return this._cache.get(key);
+    const best = Math.max(1, this.ranked('chain')[0]?.gph || 0);
+    const HC = new Map();
+    const H = (sk, lvl) => {
+      if (NOT_TRAINABLE.has(sk) || lvl <= this.level(sk)) return 0;
+      const k = sk + '|' + lvl;
+      if (!HC.has(k)) HC.set(k, this.planLevel(sk, lvl).hours);
+      return HC.get(k);
+    };
+    const QC = new Map();
+    const questH = (qid) => { if (!QC.has(qid)) { const q = this.questInfo(qid); QC.set(qid, !q || q.done ? 0 : q.hours); } return QC.get(qid); };
+    // requirement cost of a method (one-off), at the levels it needs
+    const reqCost = (m) => {
+      let h = 0, ok = true;
+      const why = [];
+      for (const r of m.r) {
+        const st = this.reqStatus(r);
+        if (st.ok) continue;
+        if (st.kind === 'lvl') h += H(st.skill, st.need);
+        else if (r.t === 'quest') h += questH(r.id);
+        else if (r.t === 'shop') { const sp = this.g.shop[r.id]; h += ((sp?.cost.find(([c]) => c === 'GoldPieces')?.[1]) || 0) / best; }
+        else if (r.t === 'stat' && r.stat === 'CombatEnemyKilled') { const pl = this.combatPlan(r.key, 'money'); if (pl) h += (r.n - (st.have || 0)) * pl.f.killMs / HOUR; else { ok = false; why.push(st.text); } }
+        else if (st.kind === 'rank') { ok = false; why.push(st.text); }
+        else if (!st.known) { /* not modelled: assume met */ }
+        else { ok = false; why.push(st.text); }
+      }
+      return { h: ok ? h : Infinity, why };
+    };
+    const levelsFor = (m) => { const lv = { ...this.levels }; for (const r of m.r) if (r.t === 'lvl') lv[r.s] = Math.max(lv[r.s] ?? 1, r.l); for (const r of m.r) if (r.t === 'any') { const o = r.of.slice().sort((a, b) => H(a.s, a.l) - H(b.s, b.l))[0]; if (o) lv[o.s] = Math.max(lv[o.s] ?? 1, o.l); } return lv; };
+    const RC = new Map();
+    const rateAt = (m) => {
+      if (!RC.has(m.id)) {
+        let r = null;
+        try { r = this.rate(m, levelsFor(m)); } catch { r = null; }
+        RC.set(m.id, r && !r.blocked && r.ms > 0 ? r : null);
+      }
+      return RC.get(m.id);
+    };
+    // food eaten in fights and thieving: when it has to be gathered, use whichever food costs the least time per HP healed
+    const foods = Object.keys(this.items).filter((it) => this.items[it].heal > 0);
+    let foodPick = null;
+    const bestFood = () => {
+      if (foodPick !== null) return foodPick;
+      let bestF = null;
+      for (const f of foods) {
+        const c = choose(f, 100, new Set());
+        if (!Number.isFinite(c.h)) continue;
+        const perHeal = c.h / (100 * this.items[f].heal);
+        if (!bestF || perHeal < bestF.perHeal) bestF = { f, perHeal };
+      }
+      foodPick = bestF ? bestF.f : this.food;
+      return foodPick;
+    };
+    const insOf = (r) => {
+      const food = r.extra?.food || (r.ins.length === 1 && r.ins[0][0] === this.food && this.items[this.food]?.heal ? this.food : null);
+      if (!food || !this.items[food]?.heal) return r.ins;
+      const fb = bestFood();
+      if (!fb || fb === food) return r.ins;
+      const haveHeal = (this.bank[food] || 0) * this.items[food].heal;
+      return r.ins.map(([it, q]) => (it === food ? [fb, Math.max(0, q * this.items[food].heal) / this.items[fb].heal, food, haveHeal] : [it, q]));
+    };
+    // phase 1: cheapest way to get qty of an item (hours of play, gold counted as time at your best rate)
+    const memo = new Map();
+    const choose = (item, q, stack) => {
+      const mk = item + '|' + Math.ceil(q);
+      if (memo.has(mk)) return memo.get(mk);
+      if (stack.has(item) || stack.size > 7) return { h: Infinity };
+      stack.add(item);
+      const opts = [];
+      const price = this.buyPrice(item);
+      if (Number.isFinite(price)) opts.push({ kind: 'buy', h: (price * q) / best, gp: price * q });
+      for (const m of this.producers.get(item) || []) {
+        if (m.k === 'passive' && m.s !== 'Farming') continue;
+        if (m.quest) continue;
+        const r = rateAt(m);
+        if (!r) continue;
+        const per = r.outs.find(([i]) => i === item)?.[1] || 0;
+        if (per <= 0) continue;
+        const rc = reqCost(m);
+        if (!Number.isFinite(rc.h)) continue;
+        const hours = q / per;
+        let h = (m.k === 'passive' ? 0 : hours) + rc.h;
+        if (m.k === 'passive') h += hours / Math.max(1, this.farmPlan?.()?.byCat?.[m.cat]?.owned || 1) * 0.02; // farming runs in the background
+        for (const [it, perIn] of (foodPick === null && !stack.has('#food') ? r.ins : insOf(r))) {
+          if (h > 1e6) break;
+          const need = Math.max(0, perIn * hours - (this.bank[it] || 0));
+          if (need <= 0) continue;
+          h += choose(it, need, stack).h;
+        }
+        opts.push({ kind: 'make', m, h, perHour: per, hours, req: rc.h });
+      }
+      for (const c of this.conversions.get(item) || []) {
+        const n = q / c.per;
+        let h = (c.gp * n) / best;
+        let ok = true;
+        for (const r of c.r) { const st = this.reqStatus(r); if (st.ok) continue; if (st.kind === 'lvl') h += H(st.skill, st.need); else { ok = false; break; } }
+        if (!ok) continue;
+        for (const [it, qi] of c.in) {
+          if (h > 1e6) break;
+          const need = Math.max(0, qi * n - (this.bank[it] || 0));
+          if (need > 0) h += choose(it, need, stack).h;
+        }
+        opts.push({ kind: 'conv', c, h, n });
+      }
+      stack.delete(item);
+      opts.sort((a, b) => a.h - b.h);
+      const res = opts[0] || { h: Infinity };
+      res.alts = opts.slice(1, 4);
+      memo.set(mk, res);
+      return res;
+    };
+    // phase 2: expand into a plan
+    const bank = { ...this.bank };
+    const lvNeed = {}, quests = new Set(), kills = new Map(), shopNeed = new Set(), notes = new Set();
+    const steps = new Map(); // method id -> { m, hours, items: Map(item -> qty), order }
+    const buys = new Map();
+    const used = new Map();
+    let order = 0, missing = null;
+    const realize = (item, q, depth = 0) => {
+      const have = Math.min(bank[item] || 0, q);
+      if (have > 0) { bank[item] -= have; used.set(item, (used.get(item) || 0) + have); q -= have; }
+      if (q <= 1e-9) return;
+      const c = choose(item, q, new Set());
+      if (!Number.isFinite(c.h) || depth > 8) { const why = explain(item, new Set()); missing = missing || why.item; notes.add(why.text); return; }
+      if (c.kind === 'buy') { buys.set(item, (buys.get(item) || 0) + q); return; }
+      if (c.kind === 'conv') {
+        const cv = c.c, n = q / cv.per;
+        for (const r of cv.r) { const st = this.reqStatus(r); if (!st.ok && st.kind === 'lvl') lvNeed[st.skill] = Math.max(lvNeed[st.skill] || 0, st.need); }
+        for (const [it, qi] of cv.in) realize(it, qi * n, depth + 1);
+        if (!steps.has(cv.id)) steps.set(cv.id, { m: { id: cv.id, s: cv.kind === 'open' ? 'Bank' : 'Bank', n: cv.n, k: 'instant', i: this.items[cv.kind === 'open' ? cv.in[0][0] : item]?.i }, conv: cv, hours: 0, items: new Map(), xp: 0, gp: 0, order: 0 });
+        const s = steps.get(cv.id);
+        s.items.set(item, (s.items.get(item) || 0) + q); s.count = (s.count || 0) + n; s.order = ++order; s.gp += cv.gp * n;
+        if (cv.kind === 'open') { const it = this.items[cv.in[0][0]]; const tot = it.open.table.reduce((a, r) => a + r[1], 0) || 1; for (const [x, w, lo, hi] of it.open.table) if (x !== item) bank[x] = (bank[x] || 0) + n * (w / tot) * (lo + hi) / 2; }
+        return;
+      }
+      const m = c.m, r = rateAt(m);
+      const hours = q / c.perHour;
+      for (const rq of m.r) {
+        const st = this.reqStatus(rq);
+        if (st.ok) continue;
+        if (st.kind === 'lvl') lvNeed[st.skill] = Math.max(lvNeed[st.skill] || 0, st.need);
+        else if (rq.t === 'quest') quests.add(rq.id);
+        else if (rq.t === 'shop') shopNeed.add(rq.id);
+        else if (rq.t === 'stat') kills.set(rq.key, Math.max(kills.get(rq.key) || 0, rq.n - (st.have || 0)));
+        else if (!st.known) notes.add(`${st.text} (not checked)`);
+      }
+      for (const [it, perIn, orig, haveHeal] of insOf(r)) {
+        if (orig) {
+          // eat what you have first, then the cheapest food to get
+          const healNeed = perIn * hours * this.items[it].heal;
+          const fromBank = Math.min(bank[orig] || 0, healNeed / this.items[orig].heal);
+          if (fromBank > 0) { bank[orig] -= fromBank; used.set(orig, (used.get(orig) || 0) + fromBank); }
+          realize(it, Math.max(0, healNeed - fromBank * this.items[orig].heal) / this.items[it].heal, depth + 1);
+        } else realize(it, perIn * hours, depth + 1);
+      }
+      if (!steps.has(m.id)) steps.set(m.id, { m, hours: 0, items: new Map(), xp: 0, gp: 0, order: 0 });
+      const s = steps.get(m.id);
+      s.hours += hours; s.items.set(item, (s.items.get(item) || 0) + q); s.xp += r.xp * hours; s.order = ++order;
+      // by-products go to the bank for later steps
+      for (const [it, per] of r.outs) if (it !== item) bank[it] = (bank[it] || 0) + per * hours;
+    };
+    // why an item can't be had: follow the cheapest-looking recipe down to the first missing piece
+    const explain = (item, seen) => {
+      if (seen.has(item) || seen.size > 8) return { item, text: `No known way to get ${this.name(item)} yet` };
+      seen.add(item);
+      const ms = (this.producers.get(item) || []).filter((m) => !m.quest);
+      for (const m of ms) {
+        const rc = reqCost(m);
+        if (!Number.isFinite(rc.h)) return { item, text: `${this.name(item)} needs ${rc.why.join(', ') || 'something not reachable yet'} (${m.n})` };
+        const r = rateAt(m);
+        if (!r) { if (m.x?.t === 'fight') return { item, text: `${this.name(item)} drops from ${m.n}, which isn't safe with your gear yet` }; continue; }
+        for (const [it] of r.ins) if (!Number.isFinite(choose(it, 1, new Set()).h)) return explain(it, seen);
+      }
+      for (const c of this.conversions.get(item) || []) for (const [it] of c.in) if (!Number.isFinite(choose(it, 1, new Set()).h)) return explain(it, seen);
+      return { item, text: ms.length ? `No reachable way to get ${this.name(item)} yet` : `${this.name(item)} has no source the site models yet (events, special drops)` };
+    };
+    const tq = Math.max(0, qty);
+    bestFood(); memo.clear(); // re-cost every choice with the better food
+    realize(target, tq);
+    // quests: their own requirements and training join the plan
+    const questList = [];
+    const addQuest = (qid, seen = new Set()) => {
+      if (seen.has(qid)) return; seen.add(qid);
+      const q = this.questInfo(qid);
+      if (!q || q.done) return;
+      for (const r of q.Q.r) { if (r.t === 'quest') addQuest(r.id, seen); else if (r.t === 'lvl') lvNeed[r.s] = Math.max(lvNeed[r.s] || 0, r.l); }
+      for (const t of q.training || []) lvNeed[t.skill] = Math.max(lvNeed[t.skill] || 0, t.level);
+      if (!questList.some((x) => x.id === qid)) questList.push({ id: qid, q, hours: Math.max(0, q.hours - (q.training || []).reduce((a, t) => a + t.hours, 0)) });
+    };
+    for (const qid of quests) addQuest(qid);
+    // training, merged per skill; XP from the plan's own steps in that skill counts toward it
+    const stepXp = {};
+    for (const s of steps.values()) if (s.m.s && !NOT_TRAINABLE.has(s.m.s)) stepXp[s.m.s] = (stepXp[s.m.s] || 0) + s.xp;
+    const training = Object.entries(lvNeed).filter(([sk, l]) => l > this.level(sk) && !NOT_TRAINABLE.has(sk)).map(([sk, l]) => {
+      const full = H(sk, l);
+      const xpNeed = Math.max(1, xpForLevel(l) - (this.p.skills?.[sk]?.xp || 0));
+      const credit = Math.min(xpNeed, stepXp[sk] || 0);
+      return { skill: sk, level: l, from: this.level(sk), hours: full * (1 - credit / xpNeed), full, credit };
+    }).sort((a, b) => a.hours - b.hours);
+    const killList = [...kills].map(([en, n]) => { const pl = this.combatPlan(en, 'money'); return { enemy: en, n, hours: pl ? n * pl.f.killMs / HOUR : Infinity, style: pl?.style }; });
+    let gp = 0;
+    for (const [it, q] of buys) gp += q * this.buyPrice(it);
+    for (const id of shopNeed) gp += (this.g.shop[id]?.cost.find(([c]) => c === 'GoldPieces')?.[1]) || 0;
+    const wallet = this.p.wallet?.GoldPieces ?? this.p.header?.gp ?? 0;
+    const earn = Math.max(0, gp - wallet) / best;
+    const made = [...steps.values()].sort((a, b) => a.order - b.order);
+    const activeH = made.reduce((a, s) => a + (s.m.k === 'passive' ? 0 : s.hours), 0);
+    const total = training.reduce((a, t) => a + t.hours, 0) + questList.reduce((a, q) => a + q.hours, 0) + killList.reduce((a, k) => a + k.hours, 0) + activeH + earn;
+    const res = { item: target, qty: tq, have: this.bank[target] || 0, used: [...used], buys: [...buys], shopNeed: [...shopNeed], training, quests: questList, kills: killList, steps: made, gp, earn, total, notes: [...notes], missing, best, choice: choose(target, Math.max(1, tq - (this.bank[target] || 0)), new Set()) };
+    this._cache.set(key, res);
+    return res;
+  }
+
   /** Clone with extra hypothetical astrology nodes. */
   withAstro(nodes) {
     const e = Object.create(Engine.prototype);
@@ -2071,9 +2307,31 @@ export class Engine {
         steps.push({ kind: 'unlock', id: 'u:' + m.id, m, title: `Start ${m.n}`, hours: 0, why });
       }
     }
+    let notes = [];
+    if (goal.type === 'item') {
+      const qty = Math.max(1, Math.round(goal.qty || 1));
+      const a = this.acquire(goal.id, qty);
+      title = `${qty.toLocaleString('en-US')} × ${this.name(goal.id)}`;
+      notes = a.notes;
+      if (a.used.length) steps.push({ kind: 'have', id: 'bank', title: 'Use what you have', hours: 0, items: a.used, why: a.used.map(([it, q]) => `${Math.round(q).toLocaleString('en-US')} ${this.name(it)}`).join(', ') });
+      for (const tr of a.training) steps.push({ kind: 'train', id: 't:' + tr.skill + tr.level, skill: tr.skill, level: tr.level, from: tr.from, title: `Train ${tr.skill} to ${tr.level}`, hours: tr.hours,
+        why: tr.credit > 0 ? `the steps below give ${Math.round(tr.credit).toLocaleString('en-US')} ${tr.skill} XP of it (saves ${fmtDuration(tr.full - tr.hours)})` : 'a step below needs it' });
+      for (const q of a.quests) steps.push({ kind: 'quest', id: 'q:' + q.id, q: q.q, title: `Quest: ${q.q.Q.n}`, hours: q.hours, why: 'unlocks a source below' });
+      for (const k of a.kills) steps.push({ kind: 'kill', id: 'k:' + k.enemy, enemy: k.enemy, title: `Kill ${k.n} ${this.g.combat.enemies[k.enemy]?.n || k.enemy}`, hours: k.hours, why: k.style ? `${k.style} · unlocks a source below` : 'not safe with your gear yet' });
+      for (const sp of a.shopNeed) steps.push({ kind: 'shop', id: 's:' + sp, title: `Buy ${this.g.shop[sp]?.n || sp}`, hours: 0, why: 'unlocks a source below' });
+      if (a.buys.length) steps.push({ kind: 'buy', id: 'buy', title: `Buy ${a.buys.map(([it, q]) => `${Math.ceil(q).toLocaleString('en-US')} ${this.name(it)}`).join(', ')}`, hours: 0, items: a.buys, why: 'from the shop' });
+      if (a.earn > 0.005) steps.push({ kind: 'shop', id: 'gold', title: `Earn ${Math.round(a.gp - (this.p.wallet?.GoldPieces ?? 0)).toLocaleString('en-US')} more gold`, hours: a.earn, why: `at your best rate (${Math.round(a.best).toLocaleString('en-US')} gp/hr)` });
+      for (const s of a.steps) {
+        const items = [...s.items];
+        const what = items.map(([it, q]) => `${Math.ceil(q).toLocaleString('en-US')} ${this.name(it)}`).join(', ');
+        const verb = s.conv ? (s.conv.kind === 'open' ? `Open ${Math.ceil(s.count).toLocaleString('en-US')} × ${this.name(s.conv.in[0][0])} for` : 'Upgrade into') : s.m.x?.t === 'fight' ? `Fight ${s.m.n} for` : s.m.x?.t === 'dungeon' ? `Run ${s.m.n} for` : s.m.k === 'passive' ? 'Grow' : ({ Woodcutting: 'Cut', Fishing: 'Catch', Mining: 'Mine', Thieving: 'Steal', Hunting: 'Hunt', Cooking: 'Cook', Smithing: 'Smith', Fletching: 'Fletch', Crafting: 'Craft', Herblore: 'Brew', Runecrafting: 'Craft', Firemaking: 'Burn for', Beastcrafting: 'Craft' })[s.m.s] || 'Make';
+        steps.push({ kind: 'make', id: 'm:' + s.m.id, m: s.m, item: items[0]?.[0], title: `${verb} ${what}`, hours: s.m.k === 'passive' ? 0 : s.hours,
+          why: s.conv ? (s.gp > 0 ? `costs ${Math.round(s.gp).toLocaleString('en-US')} gold` : 'instant') : s.m.k === 'passive' ? `${s.m.n} plot, about ${fmtDuration(s.hours)} of growing in the background` : `${s.m.s} · ${s.m.n}${s.m.loc ? ' (' + s.m.loc + ')' : ''}` });
+      }
+    }
     let t = 0;
     for (const s of steps) { t += Number.isFinite(s.hours) ? s.hours : 0; s.time = t; }
-    const res = { title, steps, hours: steps.reduce((a, s) => a + s.hours, 0), unknown: steps.some((s) => s.unknown || !Number.isFinite(s.hours)) };
+    const res = { title, steps, notes, hours: steps.reduce((a, s) => a + s.hours, 0), unknown: notes.length > 0 || steps.some((s) => s.unknown || !Number.isFinite(s.hours)) };
     this._cache.set(key, res);
     return res;
   }

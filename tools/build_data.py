@@ -833,6 +833,10 @@ def main():
         "gameVersion": "Alpha 0.11.7 (save v32)",
         "items": items, "buy": buy, "shop": shop, "methods": methods, "skills": skills, "currencies": cur_icons,
         "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat, "quests": quests, "astro": astro, "farm": farm,
+        # bank upgrades: combine items into an upgraded item (instant)
+        "upgrades": [{"id": u["Id"], "out": short(u["UpgradedItem"]), "q": u.get("QuantityPerUpgrade") or 1, "in": iq((u.get("Costs") or {}).get("Items")),
+                      "gp": sum(c["Quantity"] for c in (u.get("Costs") or {}).get("Currencies") or [] if short(c["Currency"]) == "GoldPieces"),
+                      "r": reqs_of(u.get("Requirements"))} for u in O.get("ItemUpgrade") or []],
     }
     with open(os.path.join(OUT, "data", "game.json"), "w", encoding="utf-8") as f:
         json.dump(game, f, separators=(",", ":"), ensure_ascii=False)
