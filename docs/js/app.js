@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=202611260612';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260612';
-import { drawCard } from './card.js?v=202611260612';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260612';
+import { decodeSave } from './save.js?v=202611260613';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260613';
+import { drawCard } from './card.js?v=202611260613';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260613';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -181,12 +181,12 @@ function renderLanding(error) {
     <div>
       <span class="eyebrow">Melvor Idle 2 · companion</span>
       <h1 class="hero-title">Know exactly what to do <span class="gild">next.</span></h1>
-      <p class="hero-sub">Paste your save string and Melvor Ledger reads your levels, shop upgrades, tools and bank. It then works out your best money makers, the fastest route to any level, and which upgrade pays for itself first.</p>
+      <p class="hero-sub">Paste your save string. Melvor Ledger reads everything in it (levels, gear, bank, quests, farm, astrology, guild ranks) and tells you where your account stands and what to do next, with every chain behind it worked out.</p>
       <ul class="hero-points">
-        <li>${img(sk('Mining'), '', 28)}<span><b>Money makers.</b> Every method ranked by gold per hour, from scratch or from your bank, with full production chains.</span></li>
-        <li>${img(sk('Smithing'), '', 28)}<span><b>Training planner.</b> The fastest path to any level, the supplies it needs, and what it earns or costs.</span></li>
-        <li>${img(G().skills._Shop?.i || sk('Bank'), '', 28)}<span><b>Upgrade advisor.</b> Which shop upgrade to buy next, and how many hours it takes to pay back.</span></li>
-        <li>${img(sk('Thieving'), '', 28)}<span><b>Real game formulas.</b> Success chances, stuns, steps, preservation and your tool bonuses, straight from the game files.</span></li>
+        <li>${img(G().skills.Quests?.i || sk('Mining'), '', 28)}<span><b>Your account, read.</b> Its stage, what it leans on, the levels that open the most, and what your quests are waiting on.</span></li>
+        <li>${img(sk('Smithing'), '', 28)}<span><b>One route to anything.</b> Any item, level, quest or fight: the materials from other skills, the levels they need, the gear and food, your leftovers used first.</span></li>
+        <li>${img(sk('Fishing'), '', 28)}<span><b>Money and upgrades.</b> What pays most now, what to leave running, and which purchase pays for itself first.</span></li>
+        <li>${img(sk('Thieving'), '', 28)}<span><b>Real game formulas.</b> Success chances, yields, combat and your bonuses, straight from the game files.</span></li>
       </ul>
     </div>
     <div class="panel import-card">
@@ -1141,7 +1141,15 @@ function viewOverview() {
   const lowStyles = Object.entries(cl).filter(([k, v]) => k !== r.mainStyle && v < 10).map(([k]) => k);
   const strong = r.top.map((x) => `${x.skill} ${x.level}`);
   const weak = r.lowest.filter((x) => x.level <= 5).map((x) => x.skill);
-  const plan = e.speedPlan({ horizon: 96, maxSteps: 6 });
+  const plan = e.speedPlan({ horizon: 96, maxSteps: 8 });
+  // consecutive upgrades read as one step ("buy these three")
+  const groups = [];
+  for (const st of plan.steps) {
+    const last = groups[groups.length - 1];
+    if (st.kind === 'shop' && last?.kind === 'shop') { last.list.push(st); last.hours += st.hours; last.rateAfter = st.rateAfter; continue; }
+    groups.push({ ...st, list: [st] });
+  }
+  for (const gp of groups) if (gp.kind === 'shop' && gp.list.length > 1) { gp.title = `Buy ${gp.list.length} upgrades`; gp.why = gp.list.map((x) => x.title.replace(/^Buy /, '')).join(', '); }
   const kindLabel = { unlock: 'Unlock', shop: 'Upgrade', gear: 'Gear', quest: 'Quest', astro: 'Astrology' };
   const stepIcon = (st) => (st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'quest' ? g.skills.Quests?.i : st.kind === 'gear' ? itemIcon(st.id.slice(2)) : st.kind === 'astro' ? g.astro.cons.find((c) => c.id === st.cons)?.i : g.shop[st.id.slice(2)]?.i || skillIcon(st.skill) || g.skills._Shop?.i);
   const alertIcon = { astro: skillIcon('Astrology'), farm: skillIcon('Farming'), shop: g.skills._Shop?.i, quest: g.skills.Quests?.i, slayer: skillIcon('Slayer'), bank: g.skills.Bank?.i };
@@ -1168,7 +1176,7 @@ function viewOverview() {
 
   <section class="ov-sec">
     <div class="ov-h"><h3>Do this next</h3><button class="linkish" data-gotab="plan">Full route →</button></div>
-    ${plan.steps.length ? `<div class="ov-steps">${plan.steps.slice(0, 3).map((st, i) => `<button class="panel ov-step" data-gotab="plan">
+    ${groups.length ? `<div class="ov-steps">${groups.slice(0, 3).map((st, i) => `<button class="panel ov-step" data-gotab="plan">
       <span class="ov-n num">${i + 1}</span>${img(stepIcon(st), '', 30)}
       <span class="ov-main"><small>${kindLabel[st.kind] || 'Step'}</small><b>${esc(st.title)}</b><span class="muted">${esc(st.why || '')}</span></span>
       <span class="ov-side"><b class="num">${fmtDuration(st.hours)}</b>${st.rateAfter > st.rateBefore + 1 ? `<small class="green">${fmtGp(st.rateBefore)} → ${fmtGp(st.rateAfter)}/hr</small>` : ''}</span>
