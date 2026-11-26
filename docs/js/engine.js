@@ -2117,7 +2117,21 @@ export class Engine {
     let leftovers = null;
     try { leftovers = this.leftovers().skills.filter((x) => x.saved > 0.5).sort((a, b) => b.saved - a.saved)[0] || null; } catch { leftovers = null; }
     if (leftovers) alerts.push({ kind: 'bank', text: `Your bank holds ${leftovers.skill} ${leftovers.from} → ${leftovers.to} worth of XP (saves ${fmtDuration(leftovers.saved)} of training)`, go: 'bank' });
+    // overnight: progress on a skill your quests or the cheapest gates need, if it can run 8 hours unattended
+    let overnight = null;
+    const wanted = [...[...questWait.values()].map((w) => ({ skill: w.skill, level: w.first, why: w.quests[0] })), ...gates.map((gt) => ({ skill: gt.skill, level: gt.level, why: gt.opened.find((t) => t.kind !== 'recipe')?.name }))];
+    for (const w of wanted) {
+      if (COMBAT_SKILLS.includes(w.skill) || this.level(w.skill) >= w.level) continue;
+      const o = this.trainOptions(w.skill).find((x) => x.src === 'gather' || x.bankHours >= 8);
+      if (!o) continue;
+      const xp = (this.p.skills?.[w.skill]?.xp || 0) + o.xph * 8;
+      const to = levelFromXp(xp);
+      if (to <= this.level(w.skill)) continue;
+      overnight = { skill: w.skill, from: this.level(w.skill), to, need: w.level, why: w.why, m: o.m, fromBank: o.src === 'bank' };
+      break;
+    }
     const res = {
+      overnight,
       stage, pct, qDone, qTotal: quests.length, top, lowest, best, scratch, afk, farmGph: farm?.gph || 0, mainStyle, styles,
       gates: gates.slice(0, 4), questWait: [...questWait.values()].sort((a, b) => b.quests.length - a.quests.length || (a.level - this.level(a.skill)) - (b.level - this.level(b.skill))).slice(0, 4),
       alerts, wallet,

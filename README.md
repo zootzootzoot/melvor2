@@ -12,7 +12,8 @@ The site has eight tabs: **Overview**, **Plan**, **Money**, **Skills**, **Quests
 
 - **Overview.** A read of your account in plain words: what stage it's at, the combat style you lean on and what's untrained, your strongest and barely-started skills, and where your money comes from (active, left running, farm). Below that:
   - **Right now:** things to act on, such as farm plots ready or empty, astrology picks waiting, an upgrade you can already afford, a quest ready to start, a slayer task that isn't safe, or XP sitting in your bank.
-  - **Do this next:** the first three steps of your route.
+  - **Do this next:** the first three steps of your route (several upgrades in a row read as one step).
+  - **Leaving it overnight?** The best thing to leave running for gold, and the best thing for progress: idle training (gathering, or your bank's stock) in a skill your quests or the cheapest level gates need, with the levels you'd gain in 8 hours.
   - **Levels that open the most:** for each skill, the cheapest level to reach for what it opens: quests, combat areas, dungeons, much better money makers, farm plots, shop upgrades, and gear you already own but can't wear.
   - **Your quests are waiting on:** the skills holding your unfinished quests back.
   - **Your pace** across imports.

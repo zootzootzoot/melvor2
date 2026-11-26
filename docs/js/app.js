@@ -1192,6 +1192,10 @@ function viewOverview() {
     </button>`).join('')}</div>` : '<div class="empty">Nothing pays back within a few days. Keep running your best money maker.</div>'}
   </section>
 
+  ${r.afk || r.overnight ? `<section class="ov-sec"><h3>Leaving it overnight?</h3><div class="ov-night">
+    ${r.afk ? `<div class="panel ov-n8"><small>For gold</small>${img(methodIcon(r.afk.m), '', 28)}<b>${esc(r.afk.m.n)}</b><span class="muted">${esc(r.afk.m.s)} · about <b class="gold">${fmtGp(r.afk.total)}</b> in 8 hours</span></div>` : ''}
+    ${r.overnight ? `<button class="panel ov-n8" data-tskill-go="${esc(r.overnight.skill)}" data-target-go="${r.overnight.need}"><small>For progress</small>${img(methodIcon(r.overnight.m), '', 28)}<b>${esc(r.overnight.skill)} ${r.overnight.from} → ${r.overnight.to}</b><span class="muted">${esc(r.overnight.m.n)}${r.overnight.fromBank ? ' from your bank' : ''} · toward ${r.overnight.need}${r.overnight.why ? ` for ${esc(r.overnight.why)}` : ''}</span></button>` : ''}
+  </div></section>` : ''}
   <div class="ov-two">
     <section class="panel ov-box">
       <h4>Levels that open the most</h4>
