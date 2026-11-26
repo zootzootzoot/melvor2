@@ -1162,3 +1162,6 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 button.ov-n8 { cursor: pointer; }
 
 @media (max-width: 1080px) { .stats:not(.four) .stat.hero { grid-column: 1 / -1; } }
+
+.dr-rate { display: grid; justify-items: end; line-height: 1.2; }
+.dr-rate small { font-size: 11px; color: var(--text-3); }

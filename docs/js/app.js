@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=20261126061542';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261126061542';
-import { drawCard } from './card.js?v=20261126061542';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261126061542';
+import { decodeSave } from './save.js?v=20261126173718';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261126173718';
+import { drawCard } from './card.js?v=20261126173718';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261126173718';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -603,7 +603,7 @@ function details(x) {
   const r = x.r;
   const line = (cls, it, q, sign, price = e.value(it), note = '') => {
     const val = q * price;
-    return `<tr class="${cls}"><td class="it"><span data-item="${esc(it)}">${img(itemIcon(it), '', 22)}<span>${esc(e.name(it))}${note ? ` <span class="muted">${note}</span>` : ''}</span></span></td><td class="q num">${fmtNum(q, q < 10 ? 2 : 0)}</td><td class="g num">${val > 0.5 ? sign + fmtGp(val) : '—'}</td></tr>`;
+    return `<tr class="${cls}"><td class="it"><span data-item="${esc(it)}">${img(itemIcon(it), '', 22)}<span>${esc(e.name(it))}${note ? ` <span class="muted">${note}</span>` : ''}</span></span></td><td class="q num">${fmtQty(q)}</td><td class="g num">${val > 0.5 ? sign + fmtGp(val) : '—'}</td></tr>`;
   };
   const gpLine = (gp) => (gp > 0.5 ? `<tr class="out"><td class="it"><span>${img(G().currencies.GoldPieces, '', 22)}<span>Gold coins</span></span></td><td class="q num"></td><td class="g num">+${fmtGp(gp)}</td></tr>` : '');
   const byValue = (a, b) => b[1] * e.value(b[0]) - a[1] * e.value(a[0]);
@@ -987,7 +987,7 @@ const KIND = {
   unlock: { label: 'Unlock', cls: 'k-unlock' }, shop: { label: 'Upgrade', cls: 'k-shop' },
   gear: { label: 'Gear', cls: 'k-gear' }, quest: { label: 'Quest', cls: 'k-quest' },
   train: { label: 'Train', cls: 'k-unlock' }, guild: { label: 'Guild', cls: 'k-quest' }, kill: { label: 'Kill', cls: 'k-gear' }, astro: { label: 'Astrology', cls: 'k-quest' },
-  make: { label: 'Gather / make', cls: 'k-unlock' }, buy: { label: 'Buy', cls: 'k-shop' }, have: { label: 'From your bank', cls: 'k-quest' },
+  make: { label: 'Gather / make', cls: 'k-unlock' }, seg: { label: 'Train', cls: 'k-unlock' }, buy: { label: 'Buy', cls: 'k-shop' }, have: { label: 'From your bank', cls: 'k-quest' },
 };
 
 function goalPicker() {
@@ -1017,12 +1017,12 @@ function goalView() {
   const r = e.goalRoute(g);
   const step = (st, i) => {
     const k = KIND[st.kind] || KIND.unlock;
-    const icon = st.kind === 'train' || st.kind === 'guild' ? skillIcon(st.skill) : st.kind === 'quest' ? G().skills.Quests?.i : st.kind === 'unlock' || st.kind === 'make' ? (st.m.i || itemIcon(st.item)) : st.kind === 'kill' ? G().combat.enemies[st.enemy]?.i : st.kind === 'buy' || st.kind === 'have' ? itemIcon(st.items?.[0]?.[0]) : st.id === 'gold' ? G().currencies.GoldPieces : (G().shop[st.id.slice(2)]?.i || skillIcon(st.skill) || G().skills._Shop?.i);
-    const target = st.kind === 'kill' ? 'data-gotab="money"' : st.kind === 'make' ? `data-item="${esc(st.item || '')}"` : st.kind === 'buy' || st.kind === 'have' ? `data-item="${esc(st.items?.[0]?.[0] || '')}"` : st.kind === 'train' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${st.level}"` : st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'guild' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${e.level(st.skill) + 1}"` : st.kind === 'shop' ? 'data-gotab="upgrades"' : `data-item="${esc(st.m?.primary || '')}"`;
+    const icon = st.kind === 'seg' ? methodIcon(st.m) : st.kind === 'train' || st.kind === 'guild' ? skillIcon(st.skill) : st.kind === 'quest' ? G().skills.Quests?.i : st.kind === 'unlock' || st.kind === 'make' ? (st.m.i || itemIcon(st.item)) : st.kind === 'kill' ? G().combat.enemies[st.enemy]?.i : st.kind === 'buy' || st.kind === 'have' ? itemIcon(st.items?.[0]?.[0]) : st.id === 'gold' ? G().currencies.GoldPieces : (G().shop[st.id.slice(2)]?.i || skillIcon(st.skill) || G().skills._Shop?.i);
+    const target = st.kind === 'seg' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${st.level}"` : st.kind === 'kill' ? 'data-gotab="money"' : st.kind === 'make' ? `data-item="${esc(st.item || '')}"` : st.kind === 'buy' || st.kind === 'have' ? `data-item="${esc(st.items?.[0]?.[0] || '')}"` : st.kind === 'train' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${st.level}"` : st.kind === 'quest' ? `data-quest-go="${esc(st.q.id)}"` : st.kind === 'guild' ? `data-tskill-go="${esc(st.skill)}" data-target-go="${e.level(st.skill) + 1}"` : st.kind === 'shop' ? 'data-gotab="upgrades"' : `data-item="${esc(st.m?.primary || '')}"`;
     return `<li class="ps ${k.cls}"><span class="ps-n num">${i + 1}</span>
       <div class="ps-card panel" role="button" tabindex="0" ${target}>
         <span class="ps-ico">${img(icon, '', 30)}</span>
-        <span class="ps-main"><span class="ps-kind">${k.label}</span><b>${esc(st.title)}${st.kind === 'train' ? ` <span class="muted" style="font-weight:500">from ${st.from}</span>` : ''}</b><span class="ps-why">${esc(st.why || '')}${st.unknown ? ' · some parts not modelled' : ''}</span>${st.earn > 0.005 ? `<span class="ps-pre"><span class="pre">${img(G().currencies.GoldPieces, '', 14)}Save up ${fmtGp(st.gp)} gold<span class="muted"> · ${fmtDuration(st.earn)}</span></span></span>` : ''}</span>
+        <span class="ps-main"><span class="ps-kind">${k.label}</span><b>${esc(st.title)}${st.kind === 'train' ? ` <span class="muted" style="font-weight:500">from ${st.from}</span>` : ''}</b><span class="ps-why">${esc(st.why || '')}${st.unknown ? ' · some parts not modelled' : ''}</span>${st.seg ? routeNote(st.seg) : ''}${st.earn > 0.005 ? `<span class="ps-pre"><span class="pre">${img(G().currencies.GoldPieces, '', 14)}Save up ${fmtGp(st.gp)} gold<span class="muted"> · ${fmtDuration(st.earn)}</span></span></span>` : ''}</span>
         <span class="ps-side"><b class="num">${Number.isFinite(st.hours) ? fmtDuration(st.hours) : '—'}</b><small class="num">at ${fmtDuration(st.time)}</small></span>
       </div></li>`;
   };
@@ -1601,7 +1601,7 @@ function viewItems() {
   const skills = isItems ? [...SKILL_ORDER, 'Shop', 'Quests', 'Upgrade', 'Astrology'] : [...SKILL_ORDER.filter((k) => k !== 'Combat'), 'Astrology'];
   const sorts = isItems ? [['value', 'Value'], ['margin', 'Profit to make'], ['owned', 'Bank value'], ['uses', 'Most used'], ['name', 'A–Z']]
     : [['value', 'Gold / hr'], ['margin', 'XP / hr'], ['uses', 'Level'], ['owned', 'Unlocked first'], ['name', 'A–Z']];
-  const icons = (list, n = 3) => list.slice(0, n).map(([it, q]) => `<span class="db-ic" data-item="${esc(it)}" title="${esc(e.name(it))}">${img(itemIcon(it), '', 20)}${q !== 1 ? `<small>${fmtNum(q, 2)}</small>` : ''}</span>`).join('') + (list.length > n ? `<small class="muted">+${list.length - n}</small>` : '');
+  const icons = (list, n = 3) => list.slice(0, n).map(([it, q]) => `<span class="db-ic" data-item="${esc(it)}" title="${esc(e.name(it))}">${img(itemIcon(it), '', 20)}${q !== 1 ? `<small>${fmtQty(q)}</small>` : ''}</span>`).join('') + (list.length > n ? `<small class="muted">+${list.length - n}</small>` : '');
   const itemRow = (x) => {
     const srcSk = [...new Set(x.src.map((m) => m.s))];
     const make = x.cost && x.cost.via?.kind === 'make';
@@ -1919,6 +1919,26 @@ function gameBestSection() {
 }
 
 // ---------------------------------------------------------------- item drawer
+/** Quantities that never round a real amount down to 0 (rare drops keep two significant digits). */
+function fmtQty(q) {
+  if (!Number.isFinite(q)) return '—';
+  const a = Math.abs(q);
+  if (a >= 100) return fmtNum(q);
+  if (a >= 1) return fmtNum(q, a < 10 ? 2 : 1);
+  if (a === 0) return '0';
+  return Number(q.toPrecision(2)).toString();
+}
+
+/** A drop or product rate that stays readable: rare drops as "1 per 3h", unsafe fights as such. */
+function rateCell(s) {
+  const fight = s.m.x?.t === 'fight' || s.m.x?.t === 'dungeon';
+  const per = fight && s.perAction > 0 ? `<small>${s.perAction >= 1 ? fmtNum(s.perAction, 1) + ' per kill' : '1 in ' + fmtNum(Math.round(1 / s.perAction)) + ' kills'}</small>` : '';
+  if (s.blocked) return `<span class="num dr-rate"><button class="linkish" data-ready-go="${esc(s.m.x?.e || '')}">not safe yet</button>${per}</span>`;
+  if (!(s.perHour > 0)) return `<span class="num dr-rate muted">—${per}</span>`;
+  const main = s.perHour >= 1 ? `${fmtNum(s.perHour, s.perHour < 10 ? 1 : 0)}<small>/hr</small>` : `1 per ${fmtDuration(1 / s.perHour)}`;
+  return `<span class="num dr-rate">${main}${per}</span>`;
+}
+
 function openItem(id) {
   const e = E(), g = G();
   const info = e.itemInfo(id);
@@ -1929,8 +1949,8 @@ function openItem(id) {
   const srcRows = info.sources.slice(0, 10).map((s) => `
     <div class="dr-row ${s.unlocked ? '' : 'locked'}">
       ${img(methodIcon(s.m), '', 28)}
-      <div><b>${esc(s.m.n)}</b><span>${img(skillIcon(s.m.s), '', 13)}${s.m.s} ${s.m.lv}${s.unlocked ? '' : ` · ${svg.lock} locked`}${s.m.in.length ? ` · from ${s.m.in.map(([i, q]) => `<i class="dr-in" data-item="${esc(i)}" title="${esc(e.name(i))}">${fmtNum(q, 2)}×${img(itemIcon(i), '', 13)}</i>`).join(' ')}` : ''}</span></div>
-      <span class="num">${s.perHour >= 1 ? fmtNum(s.perHour) : fmtNum(s.perHour, 2)}<small>/hr</small></span>
+      <div><b>${esc(s.m.n)}</b><span>${img(skillIcon(s.m.s), '', 13)}${s.m.s} ${s.m.lv}${s.unlocked ? '' : ` · ${svg.lock} locked`}${s.m.in.length ? ` · from ${s.m.in.map(([i, q]) => `<i class="dr-in" data-item="${esc(i)}" title="${esc(e.name(i))}">${fmtQty(q)}×${img(itemIcon(i), '', 13)}</i>`).join(' ')}` : ''}</span></div>
+      ${rateCell(s)}
     </div>`).join('');
   const useRows = info.uses.slice(0, 10).map((u) => `
     <div class="dr-row link ${u.unlocked ? '' : 'locked'}" data-item="${esc(u.m.primary || '')}">
@@ -2121,6 +2141,8 @@ document.addEventListener('keydown', (e) => {
 });
 $('#drawer').addEventListener('click', (e) => {
   if (e.target === e.currentTarget || e.target.closest('[data-close]')) { $('#drawer').close(); return; }
+  const rg = e.target.closest('[data-ready-go]');
+  if (rg) { state.goal = { type: 'ready', id: rg.dataset.readyGo }; savePrefs(); $('#drawer').close(); go('plan'); return; }
   const pl = e.target.closest('[data-plan-item]');
   if (pl) { state.goal = { type: 'item', id: pl.dataset.planItem, qty: Math.max(1, (E().bank[pl.dataset.planItem] || 0) > 0 ? 1 : 1) }; savePrefs(); $('#drawer').close(); go('plan'); return; }
   const it = e.target.closest('[data-item]');

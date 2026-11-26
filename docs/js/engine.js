@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261126061542';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261126173718';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -2736,7 +2736,73 @@ export class Engine {
       }
       else notes = [`${e?.n} is out of reach for now: ${rd?.why || 'no safe loadout found'}`];
     }
-    else if (goal.type === 'level') { title = `${goal.skill} ${goal.level}`; train(goal.skill, goal.level, 'your goal'); }
+    else if (goal.type === 'level') {
+      // a level goal is vertical: the route is the training itself, method by method, with what speeds it up first
+      const sk = goal.skill, lvl = goal.level;
+      title = `${sk} ${lvl}`;
+      if (lvl > this.level(sk) && !NOT_TRAINABLE.has(sk)) {
+        let hoursNow = this.trainHours(sk, lvl);
+        const extra = [];
+        // shop upgrades for this skill that save more training time than the gold costs to earn
+        for (const a of this.upgradeAdvice()) {
+          if (a.skill !== sk || !(a.dXp > 0) || a.gap || !Number.isFinite(hoursNow)) continue;
+          const saved = hoursNow * (1 - 1 / (1 + a.dXp));
+          const cost = Math.max(0, a.gpCost - gold) / Math.max(best, 1);
+          if (saved > Math.max(cost * 1.25, 5 / 60)) {
+            steps.push({ kind: 'shop', id: 's:' + a.id, title: `Buy ${a.s.n}`, hours: cost, earn: cost, gp: a.gpCost, skill: sk, why: `+${(a.dXp * 100).toFixed(1)}% ${sk} XP · saves about ${fmtDuration(saved)} of training` });
+            gold = Math.max(0, gold - a.gpCost); hoursNow -= saved; extra.push(a.id);
+          }
+        }
+        // the next mastery guild rank, when its XP bonus saves more time than its tasks take
+        let guildBoost = 0;
+        const gs = this.guild?.[sk];
+        if (gs?.next) {
+          const xpPct = (this.g.guild[sk]?.bonuses || []).filter((b) => b.rank === gs.next).flatMap((b) => b.b)
+            .filter(([t, n, , ctx]) => t === 'Experience' && n === 'PercentXPGained' && (!ctx.e || ctx.e === sk)).reduce((a, x) => a + x[2], 0);
+          const gp = xpPct > 0 ? this.guildPlan(sk) : null;
+          if (gp?.reachable && Number.isFinite(hoursNow)) {
+            const saved = hoursNow * (1 - 1 / (1 + xpPct));
+            if (saved > gp.hours * 1.2) {
+              steps.push({ kind: 'guild', id: 'r:' + gs.next, skill: sk, title: `Reach ${this.guildName(sk, gs.next)}`, hours: gp.hours,
+                why: `+${Math.round(xpPct * 100)}% ${sk} XP · ${gp.pick.length} guild task${gp.pick.length === 1 ? '' : 's'} · saves about ${fmtDuration(saved - gp.hours)} overall` });
+              guildBoost = xpPct;
+            }
+          }
+        }
+        const eng = extra.length ? this.withShop(extra) : this;
+        const plan = eng.planLevel(sk, lvl);
+        const scale = 1 / (1 + guildBoost);
+        // read like a person would do it: stretches that run on bank stock become one "use your bank" step,
+        // and back-to-back stretches of the same method become one
+        const out = [];
+        for (const seg of plan.segs) {
+          const bankFed = seg.m.in.length > 0 && seg.bankHours >= seg.hours * 0.5;
+          const last = out[out.length - 1];
+          if (bankFed && last?.bank) { last.list.push(seg); last.hours += seg.hours; last.to = seg.toLevel; last.xp += seg.xp; last.gp += seg.gph * seg.hours; continue; }
+          if (!bankFed && last && !last.bank && last.m.id === seg.m.id) { last.hours += seg.hours; last.to = seg.toLevel; last.xp += seg.xp; last.gp += seg.gph * seg.hours; last.seg = { ...last.seg, toLevel: seg.toLevel, hours: last.seg.hours + seg.hours, scratchHours: (last.seg.scratchHours || 0) + (seg.scratchHours || 0), bankHours: (last.seg.bankHours || 0) + (seg.bankHours || 0) }; continue; }
+          out.push({ bank: bankFed, list: [seg], m: seg.m, seg, hours: seg.hours, from: seg.fromLevel, to: seg.toLevel, xp: seg.xp, gp: seg.gph * seg.hours });
+        }
+        // a short detour between two stretches of the same method isn't worth switching for: fold it in
+        for (let i = 1; i < out.length - 1; i++) {
+          const a = out[i - 1], b = out[i], c = out[i + 1];
+          if (a.bank || b.bank || c.bank || a.m.id !== c.m.id || b.hours > 0.25 * (a.hours + c.hours)) continue;
+          a.hours += b.hours + c.hours; a.to = c.to; a.xp += b.xp + c.xp; a.gp += b.gp + c.gp;
+          a.seg = { ...a.seg, toLevel: c.to, hours: a.hours, scratchHours: (a.seg.scratchHours || 0) + (b.seg.scratchHours || 0) + (c.seg.scratchHours || 0), bankHours: (a.seg.bankHours || 0) + (b.seg.bankHours || 0) + (c.seg.bankHours || 0) };
+          out.splice(i, 2); i--;
+        }
+        for (const x of out) {
+          const xph = x.xp / Math.max(x.hours, 1e-9);
+          const gph = x.gp / Math.max(x.hours, 1e-9);
+          const names = [...new Set(x.list.map((sg) => sg.m.n))];
+          steps.push({ kind: 'seg', id: 'seg:' + x.m.id + x.from, skill: sk, m: x.m, seg: x.bank ? null : x.seg, level: x.to, from: x.from,
+            title: x.bank ? (names.length > 1 ? `Use your bank: ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` +${names.length - 3}` : ''}` : `${names[0]} from your bank`) : x.m.n,
+            hours: x.hours * scale,
+            why: `${sk} ${x.from} → ${x.to} · ${Math.round(xph / scale).toLocaleString('en-US')} xp/hr · ${gph >= 0 ? '+' : ''}${Math.round(gph).toLocaleString('en-US')} gp/hr${x.bank ? ' · materials you already have' : ''}` });
+        }
+        if (!Number.isFinite(plan.hours)) notes = [`Nothing you can do trains ${sk} past level ${plan.stuck || this.level(sk)} yet.`];
+        lvNow[sk] = lvl;
+      }
+    }
     else if (goal.type === 'unlock') {
       const m = this.byId.get(goal.id);
       title = m?.n || goal.id;
@@ -2816,8 +2882,10 @@ export class Engine {
     const sources = (this.producers.get(item) || []).map((m) => {
       const r = this.rate(m);
       const per = r.outs.find(([i]) => i === item)?.[1] ?? 0;
-      return { m, perHour: per, unlocked: unlocked.has(m.id) };
-    }).sort((a, b) => (b.unlocked - a.unlocked) || b.perHour - a.perHour);
+      // per kill / per action, so drops still read sensibly when the rate can't be worked out (unsafe fights)
+      const perAction = m.out.find(([i]) => i === item)?.[1] ?? 0;
+      return { m, perHour: per, perAction, blocked: !!r.blocked, unlocked: unlocked.has(m.id) };
+    }).sort((a, b) => (b.unlocked - a.unlocked) || (a.blocked - b.blocked) || b.perHour - a.perHour);
     const uses = (this.consumers.get(item) || []).map((m) => ({ m, unlocked: unlocked.has(m.id), s: this.sellRate(m) }))
       .sort((a, b) => (b.unlocked - a.unlocked) || b.s.gpPerHour - a.s.gpPerHour);
     const buy = this.g.buy[item] ? { price: this.g.buy[item].p, shop: this.g.shop[this.g.buy[item].shop] } : null;
