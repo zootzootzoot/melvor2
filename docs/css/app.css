@@ -1160,3 +1160,5 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 .ov-n8 img { grid-row: 2 / 4; }
 .ov-n8 .muted { font-size: 13px; }
 button.ov-n8 { cursor: pointer; }
+
+@media (max-width: 1080px) { .stats:not(.four) .stat.hero { grid-column: 1 / -1; } }
