@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=202611260613';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260613';
-import { drawCard } from './card.js?v=202611260613';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260613';
+import { decodeSave } from './save.js?v=202611260614';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260614';
+import { drawCard } from './card.js?v=202611260614';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260614';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -30,6 +30,7 @@ const MODES = {
   best: { label: 'Best now', desc: 'Whichever pays more: making it from scratch, or using what is already in your bank' },
   chain: { label: 'From scratch', desc: 'Sustainable: you gather every input yourself, or buy it when the shop is cheaper' },
   afk: { label: 'Leave it running', desc: 'One action left going while you are away: gathering, or working through your bank' },
+  next: { label: 'Coming up', desc: 'What you unlock in the next levels, and the best money makers in the game' },
 };
 // older views still reachable from links (bank-limited rates, value added)
 const HIDDEN_MODES = { bank: { label: 'From your bank' }, sell: { label: 'Value added' } };
@@ -435,9 +436,17 @@ function rowsForMoney() {
   return rows;
 }
 
+function moneySwitch() {
+  const modes = Object.entries(MODES).filter(([k]) => !(state.explorer && (k === 'bank' || k === 'best' || k === 'next')));
+  return `<div class="mode-switch" role="tablist" aria-label="Pricing" style="--n:${modes.length}">
+      ${modes.map(([k, m]) => `<button class="mode" role="tab" data-mode="${k}" aria-selected="${state.mode === k}"><b><span class="dot"></span>${m.label}</b><span>${m.desc}</span></button>`).join('')}
+    </div>`;
+}
+
 function viewMoney() {
   const e = E();
-  if (state.explorer && (state.mode === 'bank' || state.mode === 'best')) state.mode = 'chain';
+  if (state.explorer && (state.mode === 'bank' || state.mode === 'best' || state.mode === 'next')) state.mode = 'chain';
+  if (state.mode === 'next') return `<div class="controls" style="margin-top:18px">${moneySwitch()}</div>${viewUnlocks()}`;
   const afk = state.mode === 'afk';
   const rows = rowsForMoney().filter((x) => (afk ? x.total > 0 : x.gph > 0) || state.mode === 'bank');
   const top = rows[0];
@@ -1833,7 +1842,7 @@ function viewUnlocks() {
       <span class="num gold">${fmtGp(x.gph)}<small> gp/hr</small></span>
     </button>`;
   return `
-  <div class="section-head"><div><h2>Next unlocks</h2><p>Money makers you are close to unlocking that pay more than what you can do now. Each is valued from scratch at its unlock level, using today's input costs, and compared with your best sustainable rate (bank stock runs out). Click one to open its training route.</p></div></div>
+  <div class="section-head"><div><h2>Coming up</h2><p>Grouped by how many levels away. Money makers you are close to unlocking that pay more than what you can do now. Each is valued from scratch at its unlock level, using today's input costs, and compared with your best sustainable rate (bank stock runs out). Click one to open its training route.</p></div></div>
   ${all.length ? `<h3 class="bu-h3">Beats everything you can do now</h3><div class="bu-grid stagger">${all.slice(0, 6).map(card).join('')}</div>` : `<div class="note">${svg.info}<span>Nothing within 25 levels beats your current best of ${fmtGp(better.nowBest)}/hr from scratch.</span></div>`}
   <h3 class="bu-h3">Coming up next</h3>
   <p class="bu-p">Every money maker you are close to, grouped by how many levels away it is. These are valued at the level where they open, with inputs at their sell value.</p>
