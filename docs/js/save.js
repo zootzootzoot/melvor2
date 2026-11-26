@@ -2,7 +2,7 @@
 // Save string = Base64( Brotli( SaveWriter stream ) ). The game flushes the Brotli
 // stream without closing it, so the stream is "truncated" by design: we decode
 // with a streaming decoder and accept NeedsMoreInput at the end.
-import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611260410';
+import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=202611260416';
 
 let brotliReady = null;
 /** For Node tests: initialise the decoder from wasm bytes instead of fetching it. */
@@ -360,10 +360,42 @@ export async function decodeSave(input) {
       }
     } catch { /* tolerate */ }
   }
+  // Farming/Passive: [bool hasCat [string]], int64 currentTick, int n plots × (string id, region{bool watered, 4 bools auto,
+  // bool [string selectedRecipe], bool [string selectedCompost], bool [string currentCompost], int state, state data})
+  // state: 0 locked, 1 empty, 2 growing (recipe, timer), 3 grown (recipe, int qty, item, int regrows), 4 regrowing (recipe, timer, int regrows), 5 providing bonus (recipe, timer)
+  // timer: bool autoRestart, int state, int waitTicks, int64 scheduledTick, int pausedTicksLeft
+  const farm = { tick: null, plots: {} };
+  const fc = ents.Farming?.Passive;
+  if (fc) {
+    safe('farming', () => {
+      const r = new Reader(raw, fc.pos);
+      if (r.bool()) r.str();
+      farm.tick = Number(r.i64());
+      const n = r.i32();
+      for (let i = 0; i < n; i++) {
+        const id = short(r.str()); const len = r.i32(); const e = r.p + len;
+        try {
+          const watered = r.bool(); r.bool(); r.bool(); r.bool(); r.bool();
+          const selected = r.bool() ? short(r.str()) : null;
+          const selCompost = r.bool() ? short(r.str()) : null;
+          const compost = r.bool() ? short(r.str()) : null;
+          const state = r.i32();
+          const pl = { watered, selected, selCompost, compost, state };
+          const timer = () => { r.bool(); const st = r.i32(); const wait = r.i32(); const at = Number(r.i64()); const paused = r.i32(); return { st, wait, left: st === 1 ? paused : st === 0 ? 0 : at - farm.tick }; };
+          if (state >= 2) pl.recipe = short(r.str());
+          if (state === 2 || state === 5) pl.timer = timer();
+          else if (state === 3) { pl.qty = r.i32(); pl.item = short(r.str()); pl.regrows = r.i32(); }
+          else if (state === 4) { pl.timer = timer(); pl.regrows = r.i32(); }
+          farm.plots[id] = pl;
+        } catch { /* skip */ }
+        r.p = e;
+      }
+    }, null);
+  }
   // one lookup across every statistics table: stats.all[statistic][id] = value
   stats.all = {};
   for (const kind of ['items', 'currencies', 'enemies', 'dungeons', 'styles', 'effects', 'prayers']) for (const [k, v] of Object.entries(stats[kind])) stats.all[k] = { ...(stats.all[k] || {}), ...v };
   const components = Object.fromEntries(Object.entries(ents).map(([k, v]) => [k, Object.keys(v)]));
-  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, quests, slayer, astro, problems, entities: Object.keys(ents), components };
+  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, quests, slayer, astro, farm, problems, entities: Object.keys(ents), components };
 }
 export { brotliDecode as _brotliDecode, Reader as _Reader, readHeader as _readHeader, readEntities as _readEntities };

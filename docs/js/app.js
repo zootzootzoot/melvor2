@@ -1,6 +1,6 @@
-import { decodeSave } from './save.js?v=202611260410';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260410';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260410';
+import { decodeSave } from './save.js?v=202611260416';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260416';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260416';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -18,7 +18,7 @@ const MODES = {
   sell: { label: 'Value added', desc: 'The best crafts, with inputs priced at what they would sell for' },
 };
 const TABS = {
-  plan: 'Plan', money: 'Money makers', train: 'Training', quests: 'Quests', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks',
+  plan: 'Plan', money: 'Money makers', train: 'Training', quests: 'Quests', farm: 'Farm', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks',
 };
 
 const state = {
@@ -241,7 +241,7 @@ function renderTeaser() {
 
 // ---------------------------------------------------------------- dashboard
 function tabList() {
-  return state.explorer ? ['money', 'train'] : ['plan', 'money', 'train', 'quests', 'upgrades', 'bank', 'unlocks'];
+  return state.explorer ? ['money', 'train'] : ['plan', 'money', 'train', 'quests', 'farm', 'upgrades', 'bank', 'unlocks'];
 }
 
 function renderDashboard() {
@@ -354,7 +354,7 @@ function renderView() {
   const v = $('#view');
   if (!v) return;
   setHash();
-  const views = { plan: viewPlan, money: viewMoney, train: viewTrain, quests: viewQuests, upgrades: viewUpgrades, bank: viewBank, unlocks: viewUnlocks };
+  const views = { plan: viewPlan, money: viewMoney, train: viewTrain, quests: viewQuests, farm: viewFarm, upgrades: viewUpgrades, bank: viewBank, unlocks: viewUnlocks };
   v.innerHTML = `<div class="view fade-in">${(views[state.tab] || viewMoney)()}</div>`;
   bindView(v);
 }
@@ -1232,6 +1232,60 @@ function potionSection() {
       <div class="pot-k"><small>net gold</small><b class="num ${x.net > 0 ? 'gold' : 'red'}">${fmtGp(x.net, { sign: true })}</b></div>
     </div>`;
   }).join('')}</div>`;
+}
+
+// ---------------------------------------------------------------- farm
+function viewFarm() {
+  const e = E();
+  const f = e.farmPlan();
+  const g = G();
+  if (!f) return '<div class="empty">No farming data.</div>';
+  const FD = g.farm;
+  const since = f.savedAt ? Date.now() - new Date(f.savedAt).getTime() : 0;
+  const cropName = (x) => `${esc(x.m.n)}${x.compost ? ` <span class="muted">+ ${esc(g.items[x.compost]?.n || x.compost)}</span>` : ''}`;
+  const catIcon = (c) => FD.cats[c]?.i;
+  // your plots, soonest first
+  const plots = f.plots.map((p) => ({ ...p, now: p.s.state >= 2 && !p.ready ? p.leftMs - since : 0 })).sort((a, b) => (a.empty ? -1 : a.now) - (b.empty ? -1 : b.now));
+  const plotRow = (p) => {
+    const cat = FD.cats[p.pl.c];
+    const isBin = p.pl.c === 'CompostBins', isFlower = p.pl.c === 'Flowers';
+    const advice = p.empty ? (isBin ? (f.bins.find((b) => b.ok) ? `Start ${f.bins.find((b) => b.ok).m.n}` : 'nothing to make yet') : isFlower ? (f.flowers[0] ? `Plant ${f.flowers[0].m.n}` : 'no flowers unlocked') : p.best ? `Plant ${p.best.m.n}${p.best.compost ? ' with ' + (g.items[p.best.compost]?.n || p.best.compost) : ''}` : 'nothing unlocked')
+      : p.cur && p.best && p.best.gph > p.cur.gph * 1.02 ? `Next: ${p.best.m.n}${p.best.compost ? ' + ' + (g.items[p.best.compost]?.n || '') : ''} (+${fmtGp(p.best.gph - p.cur.gph)}/hr)` : p.cur ? 'Replant the same' : '';
+    const when = p.empty ? '<span class="pill gold">empty</span>' : p.ready || p.now <= 0 ? `<span class="pill green">${svg.check}ready</span>` : `<span class="num">${fmtDuration(p.now / HOUR)}</span>`;
+    return `<div class="fm-plot ${p.empty ? 'is-empty' : ''}">${img(p.m?.i || cat?.i, '', 30)}
+      <span class="fm-main"><b>${esc(p.pl.n)}</b><small>${p.m ? esc(p.m.n) : 'nothing planted'}${p.s.watered ? ' · watered' : ''}${p.s.compost ? ' · ' + esc(g.items[p.s.compost]?.n || p.s.compost) : ''}</small></span>
+      <span class="fm-adv">${esc(advice)}</span>
+      <span class="fm-when">${when}</span></div>`;
+  };
+  const cats = f.crops.filter((c) => f.byCat[c].list.length || f.byCat[c].owned);
+  const catCard = (c) => {
+    const b = f.byCat[c];
+    return `<div class="panel fm-cat">
+      <div class="fm-cat-h">${img(catIcon(c), '', 26)}<b>${esc(FD.cats[c]?.n || c)}</b><span class="muted">${b.owned} plot${b.owned === 1 ? '' : 's'}</span></div>
+      ${b.list.slice(0, 5).map((x, i) => `<div class="fm-crop ${i === 0 ? 'best' : ''}" data-item="${esc(x.m.x.p)}">${img(x.m.i, '', 22)}<span class="fm-cn">${cropName(x)}<small>${fmtNum(Math.round(x.perHarvest))} per harvest${x.harvests > 1 ? ` × ${x.harvests}` : ''} · every ${fmtDuration(x.cycleMs / HOUR / x.harvests)}${x.adj < 0.995 ? ` · −${Math.round((1 - x.adj) * 100)}% pests/disease` : ''}</small></span><span class="fm-v"><b class="num ${x.gph < 0 ? 'red' : 'gold'}">${fmtGp(x.gph)}</b><small>gp/hr</small></span><span class="fm-v"><b class="num">${fmtGp(x.xph)}</b><small>xp/hr</small></span></div>`).join('') || '<div class="muted" style="font-size:13px">No crops unlocked yet.</div>'}
+    </div>`;
+  };
+  const bestBin = f.bins.find((b) => b.ok);
+  return `
+  <div class="section-head"><div><h2>Farm</h2><p>Your plots from the save and when each is ready, the best crop for each plot type with your bonuses, what compost and flowers are worth to you, and which plot to buy next. Rates are per plot per real hour, if you replant as soon as a crop is ready.</p></div>${modsToggle()}</div>
+  <div class="plan-sum stagger">
+    <div class="panel stat"><div class="label">${img(g.currencies.GoldPieces, '', 16)}Your farm</div><div class="value num gold">${fmtGp(f.gph)}<small>/hr</small></div><div class="sub">${f.plots.length} plots on the best crops</div></div>
+    <div class="panel stat"><div class="label">${svg.clock}Next ready</div><div class="value num">${(() => { const n = plots.find((p) => !p.empty && p.now > 0); const r = plots.filter((p) => !p.empty && (p.ready || p.now <= 0)).length; return r ? `${r} ready` : n ? fmtDuration(n.now / HOUR) : '—'; })()}</div><div class="sub">as of your last import${since > 0 ? `, ${fmtDuration(since / HOUR)} ago` : ''}</div></div>
+    <div class="panel stat"><div class="label">${img(g.items.Compost?.i, '', 16)}Compost is worth</div><div class="value num">${fmtGp(f.compostWorth.Compost || 0)}<small> gp each</small></div><div class="sub">extra harvest on your best plot · sells for ${fmtGp(g.items.Compost?.v || 0)}</div></div>
+  </div>
+  ${f.known ? `<div class="section-sub"><h4>Your plots</h4><span class="muted" style="font-size:13px">Times count down from when you imported the save.</span></div>
+  <div class="fm-plots">${plots.map(plotRow).join('')}</div>` : '<div class="note">' + svg.info + '<span>Import a save to see your plots.</span></div>'}
+  <div class="section-sub" style="margin-top:22px"><h4>Best crops by plot type</h4><span class="muted" style="font-size:13px">Each crop with its best compost (compost is priced at the shop, or its sell value). Yield uses the game's formula: pests and disease above your protection cut the harvest; watering adds disease protection.</span></div>
+  <div class="fm-cats">${cats.map(catCard).join('')}</div>
+  <div class="fm-two">
+    <div class="panel fm-side"><h4>Plots to buy next</h4>
+      ${f.buy.map((b) => `<div class="fm-buy">${img(catIcon(b.cat), '', 24)}<span class="fm-main"><b>${esc(b.pl.n)}</b><small>${b.best?.m ? 'grows ' + esc(b.best.m.n) : ''}${b.missing.length ? ` · needs ${esc(b.missing.map((m) => m.text).join(', '))}` : ''}</small></span><span class="fm-v"><b class="num">${fmtGp(b.pl.gp)}</b><small>cost</small></span><span class="fm-v"><b class="num ${b.gain > 0 ? 'green' : 'muted'}">${b.gain > 0 ? '+' + fmtGp(b.gain) : '—'}</b><small>gp/hr</small></span><span class="fm-v"><b class="num">${Number.isFinite(b.payback) ? fmtDuration(b.payback) : '—'}</b><small>pays back</small></span></div>`).join('')}
+    </div>
+    <div class="panel fm-side"><h4>Compost &amp; flowers</h4>
+      ${bestBin ? `<p class="fm-p">A compost bin making <b>${esc(bestBin.m.n)}</b> turns ${bestBin.m.in.map(([it, q]) => `${fmtNum(q)} ${esc(e.name(it))}`).join(' + ')} into ${fmtNum(bestBin.out)} compost a day, worth <b class="green">${fmtGp(bestBin.gph)}/hr</b> in extra harvest. Your best crops use about ${fmtNum(Math.round(f.compostPerDay))} compost a day.</p>` : ''}
+      ${f.flowers.length ? f.flowers.slice(0, 6).map((x) => `<div class="fm-buy fm-fl">${img(x.m.i, '', 24)}<span class="fm-main"><b>${esc(x.m.n)}${x.active ? ' <span class="pill green">growing</span>' : ''}</b><small>${(x.m.x.fb || []).map((b) => { const t = bonusText(b, lookup); return `${t.val} ${t.label}`; }).join(', ')} on every plot</small></span><span class="fm-v"><b class="num ${x.net > 0 ? 'green' : 'muted'}">${x.net > 0.5 ? '+' + fmtGp(x.net) : '—'}</b><small>gp/hr net</small></span></div>`).join('') : `<p class="fm-p muted">Flowers unlock at Farming 30 (Flower plot). Each one boosts every plot while it grows: more harvest, protection from pests or disease, or Farming XP.</p>`}
+    </div>
+  </div>`;
 }
 
 // ---------------------------------------------------------------- bank

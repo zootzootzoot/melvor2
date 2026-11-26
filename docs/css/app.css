@@ -1001,3 +1001,32 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 .as-locked { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 13px; }
 .as-locked span { display: inline-flex; gap: 6px; align-items: center; }
 @media (max-width: 640px) { .as-grid { grid-template-columns: 1fr; } .as-pick { grid-template-columns: 1fr 74px; } .as-node { display: none; } }
+
+/* farm */
+.fm-plots { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 6px; margin-top: 10px; }
+.fm-plot { display: grid; grid-template-columns: 30px minmax(0, 1fr) minmax(0, 1.3fr) 84px; gap: 10px; align-items: center; padding: 8px 12px; border-radius: 10px; background: rgba(0, 0, 0, .2); border: 1px solid var(--line); }
+.fm-plot.is-empty { border-color: rgba(245, 196, 81, .35); }
+.fm-main { display: grid; min-width: 0; }
+.fm-main small, .fm-cn small { font-size: 12px; color: var(--text-3); }
+.fm-adv { font-size: 13px; color: var(--text-2); }
+.fm-when { justify-self: end; font-size: 13px; }
+.fm-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 10px; margin-top: 10px; }
+.fm-cat { padding: 12px 14px; display: grid; gap: 6px; align-content: start; }
+.fm-cat-h { display: flex; gap: 8px; align-items: center; margin-bottom: 2px; }
+.fm-cat-h .muted { margin-left: auto; font-size: 12px; }
+.fm-crop { display: grid; grid-template-columns: 22px minmax(0, 1fr) 70px 64px; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 8px; background: rgba(0, 0, 0, .18); border: 1px solid transparent; cursor: pointer; font-size: 13px; }
+.fm-crop.best { border-color: rgba(120, 220, 150, .35); }
+.fm-cn { display: grid; min-width: 0; }
+.fm-v { display: grid; justify-items: end; line-height: 1.15; }
+.fm-v small { font-size: 10px; color: var(--text-3); }
+.fm-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 22px; }
+.fm-side { padding: 14px 16px; display: grid; gap: 6px; align-content: start; }
+.fm-side h4 { margin: 0 0 4px; }
+.fm-buy { display: grid; grid-template-columns: 24px minmax(0, 1fr) 70px 70px 74px; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 8px; background: rgba(0, 0, 0, .18); font-size: 13px; }
+.fm-buy.fm-fl { grid-template-columns: 24px minmax(0, 1fr) 80px; }
+.fm-p { font-size: 13px; color: var(--text-2); margin: 0 0 6px; line-height: 1.5; }
+@media (max-width: 1080px) { .fm-two { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .fm-plots, .fm-cats { grid-template-columns: 1fr; } .fm-plot { grid-template-columns: 30px minmax(0, 1fr) 70px; } .fm-adv { grid-column: 2 / -1; grid-row: 2; } .fm-buy { grid-template-columns: 24px minmax(0, 1fr) 70px 74px; } .fm-buy .fm-v:nth-of-type(1) { display: none; } }
+
+/* keep the profile column from crowding the stat cards when meta pills are long */
+.profile > :first-child { max-width: 440px; min-width: 0; }

@@ -438,11 +438,31 @@ def main():
              extra={"x": {"t": "fm", "iv": r["BaseInterval"], "pr": iqc(r["Products"]),
                           "cur": [short(cr["Currency"]), cr["Quantity"]] if cr else None}})
 
-    # Farming: passive, per plot.
+    # Farming: passive, per plot. x holds what the yield formula needs (FarmingActionStats):
+    # qty = max(1, floor((Q + flat) * (1 + pct) * (1 - (max(0, pest - pestProt) + max(0, disease - diseaseProt)) / 100)))
+    fcats = {c["Id"]: c for c in O["FarmingCategory"]}
     for r in O["FarmingRecipe"]:
         outs = {short(r["Product"]["Item"]): r["Product"]["Quantity"]}
+        fc = fcats.get(short(r["Category"])) or {}
+        water = sum(t["Value"] for t in fc.get("WateringModifierTemplate") or [] if t["Stat"]["Name"] == "FlatDiseaseProtection")
         push("Farming", r, "passive", r["BaseInterval"], r["BaseExperience"], iq(r["Ingredients"]["Items"]), outs,
-             extra={"note": "per plot, passive"})
+             extra={"note": "per plot, passive", "x": {
+                 "t": "farm", "q": r["Product"]["Quantity"], "p": short(r["Product"]["Item"]), "iv": r["BaseInterval"],
+                 "rg": r.get("Regrows") or 0, "rgiv": r.get("RegrowInterval") or 0,
+                 "dis": (r.get("DiseaseValueAdjuster", 0) + fc.get("DiseaseValueAdjuster", 0)) if fc.get("AttractsDisease") else 0,
+                 "pest": (r.get("PestValueAdjuster", 0) + fc.get("PestValueAdjuster", 0)) if fc.get("AttractsPests") else 0,
+                 "water": water if fc.get("CanWater") else 0, "comp": bool(fc.get("CanCompost")),
+                 "fb": bonuses_of(r.get("BonusesWhenGrown")) if r.get("BonusesWhenGrown") else None, "giv": r.get("GrownInterval") or 0,
+                 "auto": iq((r.get("AutomationCosts") or {}).get("Items"))}})
+    farm = {"cats": {short(c["Id"]): {"n": c["DisplayName"], "i": icon(c.get("Icon")), "water": bool(c.get("CanWater")), "comp": bool(c.get("CanCompost"))} for c in O["FarmingCategory"]},
+            "plots": {}, "compost": {}}
+    for pl in O["FarmingPlot"]:
+        gp = sum(c["Quantity"] for c in (pl.get("Costs") or {}).get("Currencies") or [] if short(c["Currency"]) == "GoldPieces")
+        farm["plots"][pl["Id"]] = {"n": pl["DisplayName"], "c": short(pl["Category"]), "gp": gp, "ci": iq((pl.get("Costs") or {}).get("Items")), "r": reqs_of(pl.get("Requirements"))}
+    for it in O["Item"]:
+        cap = (it.get("Capabilities") or {}).get(NS + "Compost")
+        if cap:
+            farm["compost"][it["Id"]] = {"b": bonuses_of({"Component": cap.get("CompostModifierTemplate") or []})}
 
     # Hunting: survey (3rd always succeeds) -> track N steps -> trap attempts; each attempt uses a trap.
     hunt_loc = {c["Id"]: c for c in O["HuntingLocation"]}
@@ -787,7 +807,7 @@ def main():
         "v": 1,
         "gameVersion": "Alpha 0.11.7 (save v32)",
         "items": items, "buy": buy, "shop": shop, "methods": methods, "skills": skills, "currencies": cur_icons,
-        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat, "quests": quests, "astro": astro,
+        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat, "quests": quests, "astro": astro, "farm": farm,
     }
     with open(os.path.join(OUT, "data", "game.json"), "w", encoding="utf-8") as f:
         json.dump(game, f, separators=(",", ":"), ensure_ascii=False)

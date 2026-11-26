@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611260410';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611260416';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -1495,6 +1495,148 @@ export class Engine {
     out.sort((a, b) => (a.gap > 0) - (b.gap > 0) || (b.dGp > 0) - (a.dGp > 0) || a.payback - b.payback || b.dXp - a.dXp);
     this._cache.set('advice', out);
     return out;
+  }
+
+  // ---------------------------------------------------------------- farming
+  /** Seeds, compost and flower seeds are priced at the shop if sold there, else at what you'd get selling them. */
+  farmPrice(item) {
+    const b = this.buyPrice(item);
+    return Number.isFinite(b) ? b : this.value(item);
+  }
+
+  /**
+   * One plot of crop m, planted and harvested promptly, with an optional compost and flowers growing.
+   * Yield per harvest is the game's formula: max(1, floor((Q + flat) × (1 + %) × (1 − (excess pests + excess disease)/100))), × (1 + doubling).
+   */
+  farmCrop(m, { compost = null, flowers = [], water = true } = {}) {
+    const x = m.x;
+    const F = (name, st = 'FarmingAction') => {
+      let v = this.mod(m, name, null, st);
+      for (const fid of flowers) for (const [t, nm, val] of this.byId.get('Farming:' + fid)?.x?.fb || []) if (nm === name && t === st) v += val;
+      return v;
+    };
+    const compPct = compost && x.comp ? (this.g.farm.compost[compost]?.b || []).filter(([, nm]) => nm === 'PercentProductQuantity').reduce((a, b) => a + b[2], 0) : 0;
+    const pest = Math.max(0, x.pest - F('FlatPestProtection'));
+    const dis = Math.max(0, x.dis - F('FlatDiseaseProtection') - (water ? x.water : 0));
+    const adj = 1 - (pest + dis) / 100;
+    const qty = Math.max(1, Math.floor((x.q + F('FlatProductQuantity')) * (1 + F('PercentProductQuantity') + compPct) * adj));
+    const d = clamp01(F('DoublingChance'));
+    const harvests = 1 + Math.max(0, Math.floor(x.rg + F('FlatRegrows')));
+    const iv = (base) => Math.floor((base + F('FlatInterval')) * (1 + F('PercentInterval')));
+    const cycleMs = iv(x.iv) + (harvests - 1) * iv(x.rgiv);
+    const pres = clamp01(F('PreservationChance'));
+    const seeds = m.in.map(([it, q]) => [it, Math.max(1, Math.floor(q * (1 + F('PercentIngredientCost')))) * (1 - pres)]);
+    const compUse = compost && x.comp ? 1 - clamp01(F('CompostPreservationChance')) : 0;
+    const xpMult = 1 + F('PercentXPGained', 'Experience');
+    const perHarvest = qty * (1 + d);
+    const out = perHarvest * harvests;
+    const gpOut = out * this.value(x.p);
+    const gpIn = seeds.reduce((a, [it, q]) => a + q * this.farmPrice(it), 0) + compUse * (compost ? this.farmPrice(compost) : 0);
+    const xp = m.xp * xpMult * harvests;
+    const h = cycleMs / HOUR;
+    return { m, compost: compost && x.comp ? compost : null, qty, perHarvest, harvests, cycleMs, seeds, compUse, out, gpOut, gpIn, gpCycle: gpOut - gpIn, xp, gph: (gpOut - gpIn) / h, xph: xp / h, adj, pest, dis };
+  }
+
+  /**
+   * The farm: your plots from the save (what's growing, when it's ready), the best crop and compost for each plot type,
+   * which flowers to keep growing, what your farm makes per hour, and which plot to buy next.
+   */
+  farmPlan() {
+    if (this._cache.has('farm')) return this._cache.get('farm');
+    const FD = this.g.farm;
+    if (!FD) return null;
+    const unlocked = this.unlockedMethods().filter((m) => m.s === 'Farming' && m.x?.t === 'farm');
+    const saved = this.p.farm?.plots || {};
+    const known = Object.keys(saved).length > 0;
+    const owned = Object.entries(FD.plots).filter(([id, pl]) => (known ? (saved[id]?.state ?? 0) > 0 : this.p.allGuild && pl.r.every((r) => this.reqStatus(r).ok)));
+    const composts = Object.keys(FD.compost).filter((c) => (this.bank[c] || 0) > 0 || unlocked.some((m) => m.x.p === c) || Number.isFinite(this.buyPrice(c)));
+    // flowers currently growing count as active
+    const activeFlowers = Object.values(saved).filter((p) => (p.state === 2 || p.state === 5) && this.byId.get('Farming:' + p.recipe)?.x?.fb).map((p) => p.recipe);
+    const crops = ['Allotments', 'Herbs', 'Trees', 'Orchard', 'MillFarm'];
+    const bestIn = (cat, flowers, key = 'gph') => {
+      let best = null;
+      for (const m of unlocked) {
+        if (m.cat !== cat || m.x.fb) continue;
+        for (const c of [null, ...composts]) {
+          const r = this.farmCrop(m, { compost: c, flowers });
+          if (!best || r[key] > best[key]) best = r;
+        }
+      }
+      return best;
+    };
+    const byCat = {};
+    for (const cat of crops) {
+      const list = unlocked.filter((m) => m.cat === cat && !m.x.fb).map((m) => {
+        const opts = [null, ...composts].map((c) => this.farmCrop(m, { compost: c, flowers: activeFlowers }));
+        return opts.sort((a, b) => b.gph - a.gph)[0];
+      }).sort((a, b) => b.gph - a.gph);
+      byCat[cat] = { list, best: list[0] || null, bestXp: [...list].sort((a, b) => b.xph - a.xph)[0] || null, owned: owned.filter(([, pl]) => pl.c === cat).length };
+    }
+    const farmGph = (flowers) => crops.reduce((a, cat) => a + byCat[cat].owned * Math.max(0, bestIn(cat, flowers)?.gph || 0), 0);
+    const base = crops.reduce((a, cat) => a + byCat[cat].owned * Math.max(0, byCat[cat].best?.gph || 0), 0);
+    // flowers: what keeping each one growing adds across your crop plots, net of its seeds
+    const flowerPlots = owned.filter(([, pl]) => pl.c === 'Flowers').length;
+    const noFlowers = farmGph([]);
+    const flowers = unlocked.filter((m) => m.x.fb).map((m) => {
+      const gain = farmGph([m.rid]) - noFlowers;
+      const seedHr = m.in.reduce((a, [it, q]) => a + q * this.farmPrice(it), 0) / ((m.x.iv + m.x.giv) / HOUR);
+      return { m, gain, seedHr, net: gain - seedHr, active: activeFlowers.includes(m.rid) };
+    }).sort((a, b) => b.net - a.net);
+    // your plots: what's there now and when it's ready
+    const plots = owned.map(([id, pl]) => {
+      const s = saved[id] || {};
+      const m = s.recipe ? this.byId.get('Farming:' + s.recipe) : null;
+      const leftMs = s.timer && s.timer.wait > 0 && m ? Math.max(0, s.timer.left) * ((s.state === 4 ? m.x.rgiv : s.state === 5 ? m.x.giv : m.x.iv) / s.timer.wait) : 0;
+      const best = byCat[pl.c]?.best || null;
+      const cur = m && !m.x.fb && m.x.t === 'farm' ? this.farmCrop(m, { compost: s.compost, flowers: activeFlowers }) : null;
+      return { id, pl, s, m, leftMs, ready: s.state === 3 || (s.state >= 2 && leftMs <= 0), empty: s.state === 1, best, cur };
+    });
+    // compost: worth the extra harvest it gives on your best crop plots; bins turn crops into compost
+    const compostWorth = {};
+    for (const c of Object.keys(this.g.farm.compost)) {
+      let w = 0;
+      for (const cat of crops) {
+        const b = byCat[cat]; if (!b.list.length) continue;
+        for (const x of b.list) {
+          if (!x.m.x.comp) continue;
+          const plain = this.farmCrop(x.m, { flowers: activeFlowers }), withC = this.farmCrop(x.m, { compost: c, flowers: activeFlowers });
+          if (withC.compUse > 0) w = Math.max(w, (withC.gpOut - plain.gpOut) / withC.compUse);
+        }
+      }
+      compostWorth[c] = w;
+    }
+    const bins = this.methods.filter((m) => m.s === 'Farming' && m.cat === 'CompostBins' && m.x?.t === 'farm').map((m) => {
+      const ok = this.status(m).unlocked;
+      const out = m.x.q, worth = compostWorth[m.x.p] || 0;
+      const cost = m.in.reduce((a, [it, q]) => a + q * this.value(it), 0);
+      const h = m.x.iv / HOUR;
+      return { m, ok, out, worth, cost, gph: (out * worth - cost) / h, perDay: out * 24 / h };
+    }).sort((a, b) => (b.ok - a.ok) || b.gph - a.gph);
+    // compost your plots use per day if every compostable plot gets one
+    const compostPerDay = crops.reduce((a, cat) => { const b = byCat[cat].best; return a + (b?.compost ? byCat[cat].owned * b.compUse * 24 / (b.cycleMs / HOUR) : 0); }, 0);
+    // next plot to buy in each category
+    const buy = [];
+    for (const cat of [...crops, 'Flowers', 'CompostBins']) {
+      const next = Object.entries(FD.plots).find(([id, pl]) => pl.c === cat && !owned.some(([o]) => o === id));
+      if (!next) continue;
+      const [id, pl] = next;
+      const st = pl.r.map((r) => this.reqStatus(r));
+      const need = Math.max(this.level('Farming'), ...pl.r.filter((r) => r.t === 'lvl' && r.s === 'Farming').map((r) => r.l));
+      // what this plot would grow at the level it needs (crops you can't plant yet count once you can)
+      let best = byCat[cat]?.best || null;
+      if (crops.includes(cat)) {
+        for (const m of this.methods) {
+          if (m.s !== 'Farming' || m.cat !== cat || m.x?.t !== 'farm' || m.x.fb || m.lv > need || !this.status(m, { Farming: need }).unlocked) continue;
+          for (const c of [null, ...composts]) { const r = this.farmCrop(m, { compost: c, flowers: activeFlowers }); if (!best || r.gph > best.gph) best = r; }
+        }
+      }
+      const gain = cat === 'Flowers' ? Math.max(0, flowers.filter((f) => !f.active)[0]?.net || 0) : cat === 'CompostBins' ? Math.max(0, bins[0]?.gph || 0) : Math.max(0, best?.gph || 0);
+      buy.push({ id, pl, cat, gain, need, payback: gain > 0 ? pl.gp / gain : Infinity, missing: st.filter((x) => !x.ok), best: cat === 'Flowers' ? flowers[0] || null : best });
+    }
+    buy.sort((a, b) => (a.missing.length > 0) - (b.missing.length > 0) || a.payback - b.payback);
+    const res = { known, byCat, crops, plots, flowers, flowerPlots, activeFlowers, buy, gph: base, savedAt: this.p.header?.timestamp, composts, compostWorth, bins, compostPerDay };
+    this._cache.set('farm', res);
+    return res;
   }
 
   /** Clone with extra hypothetical astrology nodes. */
