@@ -1,6 +1,7 @@
-import { decodeSave } from './save.js?v=202611260423';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260423';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260423';
+import { decodeSave } from './save.js?v=202611260425';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260425';
+import { drawCard } from './card.js?v=202611260425';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260425';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -10,6 +11,9 @@ const STORE_KEY = 'melvor-ledger:save';
 const PREF_KEY = 'melvor-ledger:prefs';
 const HIST_KEY = 'melvor-ledger:history:';
 const CHARS_KEY = 'melvor-ledger:chars';
+
+/** The game writes a placeholder "Test" game mode in every save header (Alpha 0.11.x). */
+const modeName = (m) => (!m || m === 'Test' ? 'Standard' : m);
 
 /** Every character you've imported on this device: uuid -> { name, mode, t, tl, gp, s (save string) }. */
 function loadChars() { try { return JSON.parse(localStorage.getItem(CHARS_KEY)) || {}; } catch { return {}; } }
@@ -310,9 +314,9 @@ function renderDashboard() {
       <span class="eyebrow">${state.explorer ? 'Sandbox' : 'Ledger of'}</span>
       <h1 class="profile-name">${esc(s.header.name)}</h1>
       <div class="profile-meta">
-        <span class="pill">${esc(s.header.gamemode || 'Standard')}</span>
+        <span class="pill">${esc(modeName(s.header.gamemode))}</span>
         ${state.explorer ? '<span class="pill gold">All skills 99 · every shop upgrade</span>' : `<span class="pill">Saved ${esc(ago)}</span>`}
-        ${state.explorer ? '' : `<button class="pill btn-pill" id="copy-sum" title="Copy a short summary to paste into Discord">${svg.paste} Copy summary</button>`}
+        ${state.explorer ? '' : `<button class="pill btn-pill" id="copy-sum" title="Copy a short summary to paste into Discord">${svg.paste} Copy summary</button><button class="pill btn-pill" id="share-card" title="A picture of your profile to post in Discord">${svg.up} Share card</button>`}
         ${delta ? `<span class="pill green" title="Compared with your previous import (${esc(relTime(prev.t))})">${svg.up} Since ${esc(relTime(prev.t))}: ${delta.tl > 0 ? `+${delta.tl} levels · ` : ''}${fmtGp(delta.xp)} xp · ${fmtGp(delta.gp + delta.bank, { sign: true })} worth</span>` : ''}
       </div>
     </div>
@@ -350,6 +354,8 @@ function renderDashboard() {
     ].filter(Boolean);
     try { await navigator.clipboard.writeText(lines.join('\n')); toast('Summary copied'); } catch { toast('Could not copy to the clipboard'); }
   };
+  const sc = $('#share-card');
+  if (sc) sc.onclick = () => openCard();
   tabsEl.onclick = (ev) => {
     const b = ev.target.closest('[data-tab]');
     if (!b) return;
@@ -1261,6 +1267,48 @@ function potionSection() {
   }).join('')}</div>`;
 }
 
+// ---------------------------------------------------------------- share card
+async function openCard() {
+  const e = E(), g = G(), s = state.save;
+  const d = $('#card');
+  d.innerHTML = `<div class="ch-head"><h3>Share card</h3><button class="btn btn-ghost btn-sm" data-close aria-label="Close">✕</button></div>
+    <p class="muted" style="margin:0 0 10px;font-size:13px">A picture of your profile, drawn in your browser. Download it or copy it, then paste it into Discord.</p>
+    <canvas id="card-canvas" class="card-canvas" width="1200" height="630"></canvas>
+    <div class="ch-actions"><button class="btn btn-sm btn-gold" id="card-copy">Copy image</button><button class="btn btn-sm" id="card-dl">Download PNG</button></div>`;
+  d.showModal();
+  const best = e.ranked('best')[0];
+  let next = '';
+  try {
+    const plan = e.speedPlan({ horizon: 24, maxSteps: 3 });
+    const st = plan.steps[0];
+    if (st) next = `${st.title}${st.rateAfter > st.rateBefore ? ` → ${fmtGp(st.rateAfter)} gp/hr` : ''}`;
+  } catch { /* no plan */ }
+  const skills = Object.entries(s.skills).filter(([k]) => g.skills[k] && k !== 'Combat').map(([k, v]) => ({ k, level: v.level, icon: g.skills[k]?.i }))
+    .sort((a, b) => b.level - a.level || order(a.k) - order(b.k)).slice(0, 20);
+  const canvas = $('#card-canvas');
+  await drawCard(canvas, {
+    name: s.header.name, mode: s.header.gamemode && !/^(Standard|Test)$/.test(s.header.gamemode) ? s.header.gamemode : '', totalLevel: s.header.totalLevel,
+    bank: e.bankValue().total, gold: s.wallet?.GoldPieces ?? s.header.gp ?? 0,
+    best: best ? { name: best.m.n, gph: best.gph, icon: methodIcon(best.m) } : null,
+    farm: e.farmPlan?.()?.gph || 0, quests: Object.values(s.quests || {}).filter((q) => q.state >= 2).length,
+    skills, next, url: location.origin + location.pathname, saved: s.header.timestamp ? relTime(s.header.timestamp) : '', fmtGp, goldIcon: g.currencies.GoldPieces,
+  });
+  const blob = () => new Promise((res) => canvas.toBlob(res, 'image/png'));
+  d.onclick = async (ev) => {
+    if (ev.target === d || ev.target.closest('[data-close]')) { d.close(); return; }
+    if (ev.target.closest('#card-dl')) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(await blob());
+      a.download = `${s.header.name.replace(/[^\w-]+/g, '_')}-melvor-ledger.png`;
+      a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    }
+    if (ev.target.closest('#card-copy')) {
+      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob() })]); toast('Card copied: paste it into Discord'); }
+      catch { toast('Your browser blocked copying images. Use Download instead.'); }
+    }
+  };
+}
+
 // ---------------------------------------------------------------- characters
 function openChars() {
   const d = $('#chars');
@@ -1270,7 +1318,7 @@ function openChars() {
   d.innerHTML = `<div class="ch-head"><h3>Characters</h3><button class="btn btn-ghost btn-sm" data-close aria-label="Close">${svg.close || '✕'}</button></div>
     <p class="muted" style="margin:0 0 10px;font-size:13px">Every save you import is kept on this device, one per character (the newest wins). Nothing is uploaded.</p>
     <div class="ch-list">${list.map(([id, c]) => `<div class="ch-row ${id === cur ? 'on' : ''}">
-      <span class="ch-main"><b>${esc(c.name)}</b><small>${esc(c.mode || 'Standard')} · total level ${fmtNum(c.tl || 0)} · ${fmtGp(c.gp || 0)} gold · saved ${esc(relTime(new Date(c.t)))}</small></span>
+      <span class="ch-main"><b>${esc(c.name)}</b><small>${esc(modeName(c.mode))} · total level ${fmtNum(c.tl || 0)} · ${fmtGp(c.gp || 0)} gold · saved ${esc(relTime(new Date(c.t)))}</small></span>
       ${id === cur ? '<span class="pill green">open</span>' : c.s ? `<button class="btn btn-sm" data-ch-open="${esc(id)}">Open</button>` : '<span class="pill">re-import to open</span>'}
       <button class="btn btn-ghost btn-sm" data-ch-del="${esc(id)}" title="Forget this character on this device">Remove</button>
     </div>`).join('') || '<div class="muted">No characters yet.</div>'}</div>

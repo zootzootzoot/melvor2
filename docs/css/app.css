@@ -1068,3 +1068,7 @@ button.pre:hover { border-color: var(--line-strong); color: var(--text); }
 .ch-cmp th:first-child { text-align: left; color: var(--text-2); font-weight: 500; }
 .ch-cmp thead th { color: var(--text); font-weight: 700; }
 .ch-cmp th img { vertical-align: -3px; display: inline-block; }
+
+/* share card */
+.card-dlg { width: min(980px, calc(100vw - 32px)); }
+.card-canvas { width: 100%; height: auto; border-radius: 14px; display: block; box-shadow: 0 20px 60px -20px rgba(0, 0, 0, .8); }

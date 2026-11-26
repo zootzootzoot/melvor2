@@ -27,6 +27,7 @@ Everything runs in the browser. Your save is decoded locally and never uploaded.
 - **Item lookup** (Ctrl K, or click any item icon). Where an item comes from, what it's used for, its value, how much you have, and what it does when equipped.
 - **Characters.** Every save you import is kept on this device, one per character (the newest save wins). Switch between them from the top bar, remove one, or compare up to six side by side: total level, gold, bank value, best gold/hr and method, farm income, quests done, and every skill level, with the leader in each row highlighted.
 - **Copy summary.** One click copies your best money maker, best idle action and next upgrade, ready to paste into Discord.
+- **Share card.** A 1200×630 picture of your profile (best gold/hr and method, bank value, farm income, the next step on your route, and your top 20 skills), drawn in your browser. Copy it or download it as a PNG.
 - **Collection** (in Bank). Items you've found against all items, per source skill, with the quickest missing items to get at your rates and what's blocking the rest.
 - **Your pace** (in Plan). With two or more imports, your total level and wealth over time, XP per day per skill, and when you'll reach each next milestone.
 - **Explore at 99.** A sandbox with every skill at 99 and every upgrade, for browsing without a save. The landing page previews it.
@@ -41,6 +42,7 @@ docs/                 the static site (GitHub Pages serves this folder)
   js/ui.js            shared helpers, bonus text
   js/engine.js        rates with modifiers, chain solver, training planner, upgrade advisor
   js/save.js          save-string decoder
+  js/card.js          shareable profile card (canvas)
   js/vendor/          brotli-dec-wasm (MIT/Apache-2.0), streaming Brotli decoder
   data/game.json      generated from the game install
   icons/*.webp        generated from the game install

@@ -3,6 +3,7 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Share card: profile image (PNG) to copy or download
 - Multiple characters: saves kept per character, switch from the top bar, side-by-side comparison
 - Items & recipes browser: every item and recipe with values, costs to make or buy, sources, uses, filters and sorting
 - Farm tab: plots and ready times from the save, best crop and compost per plot type (game yield formula), compost worth, compost bins, flower value, next plot to buy with payback
@@ -33,4 +34,3 @@ What players would pay for, ordered by value versus effort. Done items stay list
 
 ## Up next, in order
 1. **Combat, part 3.** Enemy special attacks and passives, prayers.
-2. **Shareable cards.** An image card of your profile and best methods for Discord.
