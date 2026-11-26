@@ -3,6 +3,7 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Leftovers put to use: XP per skill from processing your bank (chained), training saved, route coverage, quest hand-ins to keep
 - How to get any item: cross-system dependency resolver (bank, shop, recipes, enemy drops, dungeons, upgrades, chests; levels, quests, kills; food) into one ordered plan, with root-cause explanations
 - Enemy special attacks in combat damage and safety (hits, damage over time, burst danger)
 - Share card: profile image (PNG) to copy or download

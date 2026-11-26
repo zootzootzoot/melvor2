@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=202611260432';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260432';
-import { drawCard } from './card.js?v=202611260432';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260432';
+import { decodeSave } from './save.js?v=202611260434';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=202611260434';
+import { drawCard } from './card.js?v=202611260434';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=202611260434';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -40,7 +40,7 @@ const TABS = {
 const state = {
   game: null, engine: null, base: null, save: null, explorer: false,
   tab: 'money', mode: 'best', skill: '', q: '', passive: false, limit: 30, open: new Set(),
-  bankView: 'process', bankSort: 'value', bankQ: '', bankSortTotal: true,
+  bankView: 'use', bankSort: 'value', bankQ: '', bankSortTotal: true,
   db: { view: 'items', q: '', cat: '', skill: '', owned: false, sort: 'value', limit: 60 },
   mods: true, trainSkill: '', trainTarget: null, trainPrefer: 'xp', trainLevel: null,
   upSort: 'payback', upFilter: 'all', history: null, window: 8, horizon: 96, goal: null,
@@ -1024,10 +1024,15 @@ function paceSection() {
 function viewPlan() {
   const e = E();
   const plan = e.speedPlan({ horizon: state.horizon, maxSteps: state.horizon > 100 ? 22 : 16 });
+  const bankXp = new Map(e.leftovers().skills.map((x) => [x.skill, x]));
   const step = (st, i) => {
     const k = KIND[st.kind] || KIND.unlock;
     const pre = [];
-    for (const t of st.trainSteps || []) pre.push(`<button class="pre linkish-plain" data-tskill-go="${esc(t.skill)}" data-target-go="${t.level}">${img(skillIcon(t.skill), '', 14)}Train ${esc(t.skill)} to ${t.level}<span class="muted"> · ${fmtDuration(t.hours)}</span></button>`);
+    for (const t of st.trainSteps || []) {
+      const lo = bankXp.get(t.skill);
+      const note = lo && lo.to > e.level(t.skill) ? (lo.to >= t.level ? ' · your bank covers it' : ` · your bank gets you to ${lo.to}`) : '';
+      pre.push(`<button class="pre linkish-plain" data-tskill-go="${esc(t.skill)}" data-target-go="${t.level}">${img(skillIcon(t.skill), '', 14)}Train ${esc(t.skill)} to ${t.level}<span class="muted"> · ${fmtDuration(t.hours)}</span>${note ? `<span class="green">${note}</span>` : ''}</button>`);
+    }
     if (st.guild) pre.push(`<button class="pre linkish-plain" data-tskill-go="${esc(st.guild.skill)}" data-target-go="${(E().level(st.guild.skill) || 1) + 1}">${img(skillIcon(st.guild.skill), '', 14)}Reach ${esc(st.guild.name)} (guild tasks)<span class="muted"> · ${fmtDuration(st.guild.hours)}</span></button>`);
     for (const k of st.kills || []) pre.push(`<span class="pre">${img(G().combat.enemies[k.enemy]?.i, '', 14)}Kill ${fmtNum(k.left)} ${esc(k.name)}<span class="muted"> · ${fmtDuration(k.hours)}${k.style ? ' ' + esc(k.style.toLowerCase()) : ''}</span></span>`);
     if (st.earn > 0.005) pre.push(`<span class="pre">${img(G().currencies.GoldPieces, '', 14)}Save up ${fmtGp(st.gp)} gold<span class="muted"> · ${fmtDuration(st.earn)} of ${esc(plan.steps[i - 1]?.bestName || plan.startName)}</span></span>`);
@@ -1544,8 +1549,29 @@ function viewFarm() {
 
 // ---------------------------------------------------------------- bank
 function viewBank() {
-  const sub = `<div class="seg bank-switch" role="tablist"><button data-bankview="process" aria-pressed="${state.bankView === 'process'}">Process first</button><button data-bankview="sell" aria-pressed="${state.bankView === 'sell'}">Safe to sell</button><button data-bankview="collection" aria-pressed="${state.bankView === 'collection'}">Collection</button><button data-bankview="all" aria-pressed="${state.bankView === 'all'}">Everything</button></div>`;
+  const sub = `<div class="seg bank-switch" role="tablist"><button data-bankview="use" aria-pressed="${state.bankView === 'use'}">Put to use</button><button data-bankview="process" aria-pressed="${state.bankView === 'process'}">Process first</button><button data-bankview="sell" aria-pressed="${state.bankView === 'sell'}">Safe to sell</button><button data-bankview="collection" aria-pressed="${state.bankView === 'collection'}">Collection</button><button data-bankview="all" aria-pressed="${state.bankView === 'all'}">Everything</button></div>`;
+  if (state.bankView === 'use') return viewLeftovers(sub);
   return state.bankView === 'all' ? viewBankAll(sub) : state.bankView === 'sell' ? viewSafeSell(sub) : state.bankView === 'collection' ? viewCollection(sub) : viewAlchemy(sub);
+}
+
+function viewLeftovers(sub) {
+  const e = E(), g = G();
+  const L = e.leftovers();
+  const keepRows = L.keep.sort((a, b) => b.qty * e.value(b.item) - a.qty * e.value(a.item));
+  const skillCard = (x) => `<div class="panel lo-skill ${x.need > x.from ? 'needed' : ''}">
+      <div class="lo-h">${img(skillIcon(x.skill), '', 28)}<span><b>${esc(x.skill)}</b><small>${x.to > x.from ? `level ${x.from} → <b class="green">${x.to}</b>` : `level ${x.from}`} · ${fmtGp(x.xp)} XP in ${fmtDuration(x.hours)}</small></span>
+        ${x.need > x.from ? (x.to >= x.need ? `<span class="pill green">${svg.check}covers the ${x.need} your route needs</span>` : `<span class="pill gold">route needs ${x.need}</span>`) : ''}
+        <span class="lo-v"><b class="num ${x.saved > 0 ? 'green' : 'muted'}">${x.saved > 0.01 ? fmtDuration(x.saved) : '—'}</b><small>training saved</small></span></div>
+      <div class="lo-runs">${x.runs.slice(0, 4).map((r) => `<div class="lo-run" data-item="${esc(r.m.primary || '')}">${img(methodIcon(r.m), '', 20)}<span>${esc(r.m.n)}</span><span class="muted">${[...r.used].slice(0, 3).map(([it, q]) => `${fmtNum(q)} ${esc(e.name(it))}`).join(', ')}</span><span class="num">${fmtGp(r.xp)} xp</span></div>`).join('')}${x.runs.length > 4 ? `<small class="muted">+${x.runs.length - 4} more</small>` : ''}</div>
+      <div class="lo-foot muted">${x.gp >= 0 ? `and the products are worth <b class="green">${fmtGp(x.gp)}</b> more than the materials` : `costs <b class="red">${fmtGp(-x.gp)}</b> of sell value`}</div>
+    </div>`;
+  return `
+  <div class="section-head"><div><h2>Bank</h2><p>Your leftovers, put to work. First what to keep for the quests you haven't finished, then how much XP your stock is worth in each skill if you process it, chains included (ore into bars into armour). Skills your route needs next come first.</p></div>${modsToggle()}</div>
+  ${sub}
+  ${keepRows.length ? `<div class="section-sub"><h4>Keep for quests</h4><span class="muted" style="font-size:13px">Hand-ins for quests you haven't finished. These are left out of everything below.</span></div>
+  <div class="lo-keep">${keepRows.map((k) => `<div class="lo-k" data-item="${esc(k.item)}">${img(itemIcon(k.item), '', 26)}<span><b>${fmtNum(Math.min(k.qty, k.have))} ${esc(e.name(k.item))}</b><small>${esc(k.why.join(', '))}${k.have < k.qty ? ` · need ${fmtNum(k.qty - k.have)} more` : ''}</small></span></div>`).join('')}</div>` : ''}
+  <div class="section-sub" style="margin-top:18px"><h4>Train from your bank</h4><span class="muted" style="font-size:13px">Processing what you already own, greedily by XP, each product feeding the next step. "Training saved" is the time your best method would take for the same XP, minus the time processing takes.</span></div>
+  ${L.skills.length ? `<div class="lo-grid">${L.skills.map(skillCard).join('')}</div>` : '<div class="empty">Nothing in your bank can be processed for XP right now.</div>'}`;
 }
 
 function viewAlchemy(sub) {

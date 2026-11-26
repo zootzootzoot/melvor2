@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611260432';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=202611260434';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -1872,6 +1872,68 @@ export class Engine {
     const total = training.reduce((a, t) => a + t.hours, 0) + questList.reduce((a, q) => a + q.hours, 0) + killList.reduce((a, k) => a + k.hours, 0) + activeH + earn;
     const res = { item: target, qty: tq, have: this.bank[target] || 0, used: [...used], buys: [...buys], shopNeed: [...shopNeed], training, quests: questList, kills: killList, steps: made, gp, earn, total, notes: [...notes], missing, best, choice: choose(target, Math.max(1, tq - (this.bank[target] || 0)), new Set()) };
     this._cache.set(key, res);
+    return res;
+  }
+
+  // ---------------------------------------------------------------- leftovers
+  /**
+   * Your bank, put to use: what to keep for unfinished quests, and per skill how much XP processing your stock gives
+   * (chains like ore → bar → armour count, each step's products feeding the next), how many levels that is, how much
+   * normal training it saves, and whether your route needs that skill.
+   */
+  leftovers() {
+    if (this._cache.has('leftovers')) return this._cache.get('leftovers');
+    const keep = new Map();
+    const addKeep = (it, q, why) => { const k = keep.get(it) || { qty: 0, why: new Set() }; k.qty += q; k.why.add(why); keep.set(it, k); };
+    for (const q of this.questList()) {
+      if (q.done) continue;
+      for (const st of q.steps || []) for (const t of st.tasks || []) for (const c of t.cost || []) if (!c.have || !t.done) { if (!t.done && (this.bank[c.item] || 0) > 0) addKeep(c.item, c.qty, q.Q.n); }
+    }
+    // levels your route needs next
+    const need = {};
+    try { for (const s of this.speedPlan({ horizon: 72, maxSteps: 10 }).steps) for (const t of s.trainSteps || []) need[t.skill] = Math.max(need[t.skill] || 0, t.level); } catch { /* no plan */ }
+    const base = {};
+    for (const [it, q] of Object.entries(this.bank)) base[it] = Math.max(0, q - (keep.get(it)?.qty || 0));
+    const unlocked = this.unlockedMethods().filter((m) => m.k === 'active' && m.in.length && !m.quest && !NOT_TRAINABLE.has(m.s) && m.x?.t !== 'fight');
+    const bySkill = new Map();
+    for (const m of unlocked) { if (!bySkill.has(m.s)) bySkill.set(m.s, []); bySkill.get(m.s).push(m); }
+    const skills = [];
+    for (const [sk, ms] of bySkill) {
+      const bank = { ...base };
+      const runs = new Map();
+      let xp = 0, hours = 0, gpIn = 0, gpOut = 0;
+      for (let iter = 0; iter < 40; iter++) {
+        let pick = null;
+        for (const m of ms) {
+          const r = this.rate(m);
+          if (!(r.xp > 0) || !r.ins.length) continue;
+          const h = Math.min(...r.ins.map(([it, q]) => (bank[it] || 0) / q));
+          if (!(h > 0) || h * r.xp < 1) continue;
+          const gain = h * r.xp;
+          if (!pick || gain > pick.gain) pick = { m, r, h, gain };
+        }
+        if (!pick) break;
+        const { m, r, h } = pick;
+        for (const [it, q] of r.ins) { bank[it] = Math.max(0, (bank[it] || 0) - q * h); gpIn += q * h * this.value(it); }
+        for (const [it, q] of r.outs) { bank[it] = (bank[it] || 0) + q * h; gpOut += q * h * this.value(it); }
+        xp += pick.gain; hours += h;
+        const run = runs.get(m.id) || { m, hours: 0, xp: 0, made: new Map(), used: new Map() };
+        run.hours += h; run.xp += pick.gain;
+        for (const [it, q] of r.outs) run.made.set(it, (run.made.get(it) || 0) + q * h);
+        for (const [it, q] of r.ins) run.used.set(it, (run.used.get(it) || 0) + q * h);
+        runs.set(m.id, run);
+      }
+      if (xp < 1) continue;
+      const cur = this.p.skills?.[sk]?.xp || 0;
+      const to = levelFromXp(cur + xp);
+      // compare with training from scratch (gathering your own inputs), not with methods that already lean on this bank
+      const bestXph = Math.max(0, ...this.trainOptions(sk).map((o) => (o.src === 'gather' ? o.xph : o.scratch?.feasible ? o.scratch.xph : 0)));
+      const saved = bestXph > 0 ? xp / bestXph - hours : 0;
+      skills.push({ skill: sk, xp, hours, from: this.level(sk), to, saved, gp: gpOut - gpIn, runs: [...runs.values()].sort((a, b) => b.xp - a.xp), need: need[sk] || 0 });
+    }
+    skills.sort((a, b) => (b.need > b.from) - (a.need > a.from) || b.saved - a.saved);
+    const res = { keep: [...keep].map(([item, k]) => ({ item, qty: k.qty, have: this.bank[item] || 0, why: [...k.why] })), skills, need };
+    this._cache.set('leftovers', res);
     return res;
   }
 
