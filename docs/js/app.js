@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=20261126183820';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261126183820';
-import { drawCard } from './card.js?v=20261126183820';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261126183820';
+import { decodeSave } from './save.js?v=20261127070212';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261127070212';
+import { drawCard } from './card.js?v=20261127070212';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261127070212';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -1377,6 +1377,7 @@ function viewUpgrades() {
   </div>
   ${list.length ? `<div class="up-grid stagger">${list.map(card).join('')}</div>` : `<div class="empty"><b>Nothing new within reach.</b>You own every skilling upgrade you currently qualify for.</div>`}
   ${gearSection()}
+  ${toolSection()}
   ${potionSection()}
   ${astroSection()}
   <details class="owned">
@@ -1402,6 +1403,20 @@ function gearSection() {
       <div class="pot-k"><small>gold / hr</small><b class="num gold">+${fmtGp(x.dGp)}</b></div>
     </div>`;
   }).join('')}</div>`;
+}
+
+function toolSection() {
+  const e = E();
+  const list = e.toolAdvice();
+  if (!list.length) return '';
+  return `<div class="section-sub" style="margin-top:26px"><h4>Tools worth getting</h4><span class="muted" style="font-size:13px">Toolbelt items you don't have (chest keys, gloves, chisels...) that would raise what you earn. Each is tested on the action it boosts, against the best you can do in that skill now, and the time to get one counts every step: drops, chests, upgrades and the levels on the way.</span></div>
+  <div class="pot-list stagger">${list.map((x) => `<div class="pot-row tool-row" role="button" tabindex="0" data-plan-tool="${esc(x.id)}">
+      ${img(x.it.i, '', 32)}
+      <div class="title"><b>${esc(x.it.n)}</b><span class="sub">${img(skillIcon(x.skill), '', 14)}${esc(x.m.n)}${x.lv && Object.keys(x.lv).length ? `<span class="sep">·</span>needs ${esc(Object.entries(x.lv).map(([k, l]) => `${k} ${l}`).join(', '))}` : ''}${x.acq?.steps?.length ? `<span class="sep">·</span>${esc(x.acq.steps.slice(-3).map((st) => st.m.n).join(' → '))}` : x.have ? '<span class="sep">·</span>in your bank' : ''}</span></div>
+      <div class="pot-k"><small>gold / hr then</small><b class="num gold">${fmtGp(x.after)}</b></div>
+      <div class="pot-k"><small>over your best</small><b class="num green">+${fmtGp(x.gain)}</b></div>
+      <div class="pot-k"><small>to get it</small><b class="num">${x.have ? 'now' : fmtDuration(x.hours)}</b></div>
+    </div>`).join('')}</div>`;
 }
 
 /** What a node does, in words. */
@@ -1770,6 +1785,8 @@ function viewLeftovers(sub) {
   return `
   <div class="section-head"><div><h2>Bank</h2><p>Your leftovers, put to work. First what to keep for the quests you haven't finished, then how much XP your stock is worth in each skill if you process it, chains included (ore into bars into armour). Skills your route needs next come first.</p></div>${modsToggle()}</div>
   ${sub}
+  ${(() => { const op = e.openables(); if (!op.length) return ''; const tot = op.reduce((a, x) => a + x.gain, 0); return `<div class="section-sub"><h4>Open these, don't sell them</h4><span class="muted" style="font-size:13px">Worth <b class="green">${fmtGp(tot)}</b> more opened than sold as they are (average contents at their sell value).</span></div>
+  <div class="lo-keep">${op.slice(0, 12).map((x) => `<div class="lo-k" data-item="${esc(x.id)}">${img(x.it.i, '', 26)}<span><b>${fmtNum(x.qty)} ${esc(x.it.n)}</b><small>sells for ${fmtGp(x.sell)} · holds ~${fmtGp(x.ev)} · <span class="green">+${fmtGp(x.gain)}</span></small></span></div>`).join('')}</div>`; })()}
   ${keepRows.length ? `<div class="section-sub"><h4>Keep for quests</h4><span class="muted" style="font-size:13px">Hand-ins for quests you haven't finished. These are left out of everything below.</span></div>
   <div class="lo-keep">${keepRows.map((k) => `<div class="lo-k" data-item="${esc(k.item)}">${img(itemIcon(k.item), '', 26)}<span><b>${fmtNum(Math.min(k.qty, k.have))} ${esc(e.name(k.item))}</b><small>${esc(k.why.join(', '))}${k.have < k.qty ? ` · need ${fmtNum(k.qty - k.have)} more` : ''}</small></span></div>`).join('')}</div>` : ''}
   <div class="section-sub" style="margin-top:18px"><h4>Train from your bank</h4><span class="muted" style="font-size:13px">Processing what you already own, greedily by XP, each product feeding the next step. "Training saved" is the time your best method would take for the same XP, minus the time processing takes.</span></div>
@@ -1873,6 +1890,26 @@ function viewBankAll(sub) {
 }
 
 // ---------------------------------------------------------------- unlocks
+// if you stuck to one skill from here: gold after 5h / 1 day / 3 days, and the level you'd reach
+function pathsSection() {
+  if (state.explorer) return '';
+  const e = E();
+  const P = e.pathEarnings([5, 24, 72]);
+  if (!P.rows.length) return '';
+  const top = P.rows[0].gold[2];
+  return `<div class="panel paths">
+    <div class="sl-h">${svg.target}<b>If you stuck to one skill from here</b><span class="muted">gold earned, always doing that skill's best-paying action as you level, from your levels and bonuses (food and lockpicks counted)</span></div>
+    <div class="pth-head"><span></span><span>Path</span><span class="r">5 hours</span><span class="r">1 day</span><span class="r">3 days</span><span class="r">Level then</span></div>
+    ${P.rows.map((x, i) => `<button class="pth-row ${i === 0 ? 'top' : ''}" data-tskill-go="${esc(x.skill)}" data-target-go="${Math.min(99, x.level)}">
+      ${img(skillIcon(x.skill), '', 24)}
+      <span class="pth-main"><b>${esc(x.skill)}</b><small>now: ${esc(x.now?.m.n || '—')}${x.ladder.length > 1 ? ` · then ${esc(x.ladder.slice(1, 4).map((l) => l.m.n).join(', '))}${x.ladder.length > 4 ? '…' : ''}` : ''}</small></span>
+      ${x.gold.map((g, j) => `<span class="r num ${j === 2 ? 'gold' : ''}">${fmtGp(g)}</span>`).join('')}
+      <span class="r num">${x.from} → ${x.level}</span>
+    </button>`).join('')}
+    <p class="muted" style="font-size:12px;margin:4px 0 0">Gathering and Thieving only, since they need no inputs. Openable drops (bird nests, bait boxes) are valued at what they hold, and rare drops at their expected value, so this runs a little above guides that sell everything as-is.</p>
+  </div>`;
+}
+
 function viewUnlocks() {
   const e = E();
   const list = e.upcoming(400);
@@ -1901,6 +1938,7 @@ function viewUnlocks() {
     </button>`;
   return `
   <div class="section-head"><div><h2>Coming up</h2><p>Grouped by how many levels away. Money makers you are close to unlocking that pay more than what you can do now. Each is valued from scratch at its unlock level, using today's input costs, and compared with your best sustainable rate (bank stock runs out). Click one to open its training route.</p></div></div>
+  ${pathsSection()}
   ${all.length ? `<h3 class="bu-h3">Beats everything you can do now</h3><div class="bu-grid stagger">${all.slice(0, 6).map(card).join('')}</div>` : `<div class="note">${svg.info}<span>Nothing within 25 levels beats your current best of ${fmtGp(better.nowBest)}/hr from scratch.</span></div>`}
   <h3 class="bu-h3">Coming up next</h3>
   <p class="bu-p">Every money maker you are close to, grouped by how many levels away it is. These are valued at the level where they open, with inputs at their sell value.</p>
@@ -2079,7 +2117,7 @@ function openPalette() {
 function bindView(v) {
   v.onclick = (ev) => {
     const itemEl = ev.target.closest('[data-item]');
-    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-goaltype],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go],[data-db],[data-ready-go],#reach-go,[data-planview]');
+    const t = ev.target.closest('[data-toggle],[data-mode],[data-skill],[data-banksort],[data-window],[data-quest],[data-quest-go],[data-horizon],[data-goaltype],[data-bsort],#more,[data-tskill],[data-target],[data-prefer],[data-upsort],[data-upfilter],[data-bankview],[data-gotab],[data-open-row],[data-tskill-go],[data-db],[data-ready-go],#reach-go,[data-planview],[data-plan-tool]');
     // Item icons open the item drawer, even inside a clickable row.
     if (itemEl?.dataset.item && (!t || (t !== itemEl && t.contains(itemEl)))) { ev.stopPropagation(); openItem(itemEl.dataset.item); return; }
     if (!t) return;
@@ -2132,6 +2170,7 @@ function bindView(v) {
     if (t.dataset.gotab) return go(t.dataset.gotab);
     if (t.id === 'more') { state.limit += 30; return rerender(); }
     if (t.dataset.planview) { state.planView = t.dataset.planview; return rerender(); }
+    if (t.dataset.planTool) { state.goal = { type: 'item', id: t.dataset.planTool, qty: 1 }; state.planView = 'route'; savePrefs(); return rerender(); }
     if (t.dataset.readyGo) { state.goal = { type: 'ready', id: t.dataset.readyGo }; savePrefs(); return go('plan'); }
     if (t.id === 'reach-go') { findReach(); return; }
     if (t.dataset.db) {

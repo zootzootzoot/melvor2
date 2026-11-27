@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261126183820';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127070212';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -761,7 +761,9 @@ export class Engine {
         const taken = (1 - succ) * (1 - clamp01(M('DamageAvoidanceChance'))) * (1 + m.dmg) / 2;
         ins = [[this.food, taken / this.items[this.food].heal]];
       }
-      extra = { stealth, perception: perc, stun: stun * (1 - avoid), stages, perComplete };
+      // locked chests: each attempt uses a Lockpick, unless you have the chest's own key
+      if (m.pick && !(m.key && this.tools[m.key])) ins = [...ins, [m.pick, 1]];
+      extra = { stealth, perception: perc, stun: stun * (1 - avoid), stages, perComplete, key: m.key && this.tools[m.key] ? m.key : null };
     } else if (x.t === 'cook') {
       ms = Math.floor(x.iv * (1 + M('PercentInterval')) + M('FlatInterval'));
       const prof = Math.max(0, lvl + M('FlatProficiency'));
@@ -952,6 +954,19 @@ export class Engine {
         if (!cur || total < cur.total - 1e-9) {
           costs.set(m.primary, { gp: gpPer, t: tPer, via: { kind: 'make', m }, total });
           changed = true;
+        }
+        // secondary outputs (e.g. Raw Whale at Deep Blue): you make the whole trip and sell everything else it brings in,
+        // so the item costs the trip's time and inputs minus the value of the rest (never below zero overall)
+        const outVal = r.outs.reduce((a, [it, q]) => a + q * this.value(it), 0) + r.gp;
+        for (const [it, q] of r.outs) {
+          if (it === m.primary || q <= 1e-9 || this.value(it) <= 0) continue;
+          const qa = q / r.aph;
+          const others = (outVal - q * this.value(it)) / r.aph;
+          const t2 = t / qa;
+          const g2 = Math.max((gp - others) / qa, -lambda * t2);
+          const tot2 = g2 + lambda * t2;
+          const c2 = costs.get(it);
+          if (!c2 || tot2 < c2.total - 1e-9) { costs.set(it, { gp: g2, t: t2, via: { kind: 'make', m, joint: true }, total: tot2 }); changed = true; }
         }
       }
       if (!changed) break;
@@ -1715,12 +1730,26 @@ export class Engine {
     const QC = new Map();
     const questH = (qid) => { if (!QC.has(qid)) { const q = this.questInfo(qid); QC.set(qid, !q || q.done ? 0 : q.hours); } return QC.get(qid); };
     // requirement cost of a method (one-off), at the levels it needs
+    // a tool you must have equipped: free if you own it, otherwise what it takes to get one
+    const owns = (it) => !!this.tools[it] || (this.bank[it] || 0) > 0;
+    const toolBusy = new Set(); // a tool whose own chain needs itself (key -> chest -> key) is not an option
+    const toolCost = (it) => {
+      if (owns(it)) return 0;
+      if (toolBusy.has(it)) return Infinity;
+      toolBusy.add(it);
+      try { return choose(it, 1, new Set()).h; } finally { toolBusy.delete(it); }
+    };
+    // the cheaper side of an either/or requirement
+    const oneCost = (r) => (r.t === 'lvl' ? H(r.s, r.l) : r.t === 'tool' ? toolCost(r.item) : this.reqStatus(r).ok ? 0 : Infinity);
+    const pickAny = (r) => r.of.map((o) => ({ o, h: this.reqStatus(o).ok ? 0 : oneCost(o) })).sort((a, b) => a.h - b.h)[0];
     const reqCost = (m) => {
       let h = 0, ok = true;
       const why = [];
       for (const r of m.r) {
         const st = this.reqStatus(r);
         if (st.ok) continue;
+        if (r.t === 'any') { const p = pickAny(r); if (p && Number.isFinite(p.h)) h += p.h; else { ok = false; why.push(st.text); } continue; }
+        if (r.t === 'tool') { const t = toolCost(r.item); if (Number.isFinite(t)) h += t; else { ok = false; why.push(st.text); } continue; }
         if (st.kind === 'lvl') h += H(st.skill, st.need);
         else if (r.t === 'quest') h += questH(r.id);
         else if (r.t === 'shop') { const sp = this.g.shop[r.id]; h += ((sp?.cost.find(([c]) => c === 'GoldPieces')?.[1]) || 0) / best; }
@@ -1731,7 +1760,7 @@ export class Engine {
       }
       return { h: ok ? h : Infinity, why };
     };
-    const levelsFor = (m) => { const lv = { ...this.levels }; for (const r of m.r) if (r.t === 'lvl') lv[r.s] = Math.max(lv[r.s] ?? 1, r.l); for (const r of m.r) if (r.t === 'any') { const o = r.of.slice().sort((a, b) => H(a.s, a.l) - H(b.s, b.l))[0]; if (o) lv[o.s] = Math.max(lv[o.s] ?? 1, o.l); } return lv; };
+    const levelsFor = (m) => { const lv = { ...this.levels }; for (const r of m.r) if (r.t === 'lvl') lv[r.s] = Math.max(lv[r.s] ?? 1, r.l); for (const r of m.r) if (r.t === 'any' && r.of.every((o) => o.t === 'lvl')) { const o = r.of.slice().sort((a, b) => H(a.s, a.l) - H(b.s, b.l))[0]; if (o) lv[o.s] = Math.max(lv[o.s] ?? 1, o.l); } return lv; };
     const RC = new Map();
     const rateAt = (m) => {
       if (!RC.has(m.id)) {
@@ -1846,7 +1875,7 @@ export class Engine {
     const bank = { ...this.bank };
     const lvNeed = {}, quests = new Set(), kills = new Map(), shopNeed = new Set(), notes = new Set();
     const steps = new Map(); // method id -> { m, hours, items: Map(item -> qty), order }
-    const readyGear = new Set(), readyFor = new Set();
+    const readyGear = new Set(), readyFor = new Set(), toolsGot = new Set();
     const buys = new Map();
     const used = new Map();
     let order = 0, missing = null;
@@ -1876,9 +1905,12 @@ export class Engine {
         }
         readyFor.add(m.id);
       }
-      for (const rq of m.r) {
-        const st = this.reqStatus(rq);
+      const applyTool = (it) => { if (!owns(it) && !toolsGot.has(it)) { toolsGot.add(it); realize(it, 1, depth + 1); } };
+      for (let rq of m.r) {
+        let st = this.reqStatus(rq);
         if (st.ok) continue;
+        if (rq.t === 'any') { const p = pickAny(rq); if (!p) continue; rq = p.o; st = this.reqStatus(rq); if (st.ok) continue; }
+        if (rq.t === 'tool') { applyTool(rq.item); continue; }
         if (st.kind === 'lvl') lvNeed[st.skill] = Math.max(lvNeed[st.skill] || 0, st.need);
         else if (rq.t === 'quest') quests.add(rq.id);
         else if (rq.t === 'shop') shopNeed.add(rq.id);
@@ -2011,6 +2043,135 @@ export class Engine {
     skills.sort((a, b) => (b.need > b.from) - (a.need > a.from) || b.saved - a.saved);
     const res = { keep: [...keep].map(([item, k]) => ({ item, qty: k.qty, have: this.bank[item] || 0, why: [...k.why] })), skills, need };
     this._cache.set('leftovers', res);
+    return res;
+  }
+
+  /** Chests, nests and boxes in your bank that are worth more opened (average contents at sell value) than sold. */
+  openables() {
+    const out = [];
+    for (const [id, q] of Object.entries(this.bank)) {
+      const it = this.items[id];
+      if (!it?.open || !(q > 0)) continue;
+      this.value(id);
+      const ev = it._ov ?? 0, sell = it.v ?? 0;
+      if (ev > sell * 1.05 && ev - sell > 1) out.push({ id, it, qty: q, sell, ev, gain: q * (ev - sell) });
+    }
+    return out.sort((a, b) => b.gain - a.gain);
+  }
+
+  // ---------------------------------------------------------------- one-path earnings
+  /**
+   * "If you stuck to one skill from here": gold earned after each checkpoint, always doing the best-paying action
+   * in that skill as you level (food and lockpicks counted as costs, everything else sold), from your levels and bonuses.
+   */
+  pathEarnings(checkpoints = [5, 24, 72]) {
+    if (this._cache.has('paths')) return this._cache.get('paths');
+    const horizon = Math.max(...checkpoints);
+    const out = [];
+    for (const sk of ['Fishing', 'Woodcutting', 'Mining', 'Thieving', 'Hunting']) {
+      const ms = this.methods.filter((m) => m.s === sk && m.k === 'active' && !m.quest && !m.in.length
+        && m.r.every((r) => (r.t === 'lvl' && r.s === sk) || this.reqStatus(r).ok));
+      if (!ms.length) continue;
+      let xp = this.p.skills?.[sk]?.xp ?? 0, lvl = this.level(sk), t = 0, gold = 0;
+      const marks = [], used = [];
+      let first = null;
+      while (t < horizon) {
+        const lv = { ...this.levels, [sk]: lvl };
+        let best = null;
+        for (const m of ms) {
+          if (!m.r.every((r) => r.t !== 'lvl' || r.s !== sk || r.l <= lvl)) continue;
+          let s;
+          try { s = this.sellRate(m, lv); } catch { continue; }
+          if (!Number.isFinite(s.gpPerHour) || !(s.r.xp > 0)) continue;
+          if (!best || s.gpPerHour > best.gph) best = { m, gph: s.gpPerHour, xph: s.r.xp };
+        }
+        if (!best) break;
+        if (!first) first = best;
+        if (used[used.length - 1]?.m.id !== best.m.id) used.push({ m: best.m, from: lvl, at: t });
+        const toNext = lvl >= 99 ? Infinity : (xpForLevel(lvl + 1) - xp) / best.xph;
+        const step = Math.min(toNext, horizon - t);
+        for (const c of checkpoints) if (t < c && t + step >= c) marks.push(gold + best.gph * (c - t));
+        gold += best.gph * step; t += step; xp += best.xph * step;
+        if (toNext <= step + 1e-9) lvl++;
+        if (!Number.isFinite(toNext)) { for (const c of checkpoints) if (marks.length < checkpoints.length && c > t - step) marks.push(gold - best.gph * (t - c)); break; }
+      }
+      while (marks.length < checkpoints.length) marks.push(gold);
+      out.push({ skill: sk, gold: marks, level: lvl, from: this.level(sk), now: first, ladder: used });
+    }
+    out.sort((a, b) => b.gold[b.gold.length - 1] - a.gold[a.gold.length - 1]);
+    const res = { checkpoints, rows: out };
+    this._cache.set('paths', res);
+    return res;
+  }
+
+  // ---------------------------------------------------------------- tools worth getting
+  /** Cheap clone with one toolbelt item swapped in (it replaces whatever sits in the same slot). Only rates are valid. */
+  withTool(id) {
+    const e = Object.create(Engine.prototype);
+    Object.assign(e, this);
+    const slot = this.items[id]?.slot;
+    const drop = new Set(Object.keys(this.tools).filter((t) => t !== id && slot && this.items[t]?.slot === slot));
+    e.tools = { ...Object.fromEntries(Object.entries(this.tools).filter(([t]) => !drop.has(t))), [id]: 1 };
+    e.sources = this.sources.filter((s) => !(s.kind === 'tool' && drop.has(s.id)));
+    if (!this.tools[id]) e.sources = [...e.sources, { kind: 'tool', id, n: this.items[id].n, i: this.items[id].i, b: this.items[id].tb }];
+    e.bIndex = new Map();
+    for (const src of e.sources) for (const [st, name, v, ctx] of src.b) { const key = st === 'G' ? 'G|' + name : st + '|' + name; if (!e.bIndex.has(key)) e.bIndex.set(key, []); e.bIndex.get(key).push({ v, ctx, src }); }
+    e._cache = new Map();
+    e._rateCache = new Map();
+    return e;
+  }
+
+  /**
+   * Toolbelt items you don't have (keys, gloves, gathering tools...) that would raise what you earn: the action each one
+   * boosts, gold/hr before and after, and what getting it takes (via acquire(), so drops, chests and upgrades all count).
+   */
+  toolAdvice({ limit = 8 } = {}) {
+    if (this._cache.has('tools')) return this._cache.get('tools');
+    const unlockedIds = new Set(this.unlockedMethods().map((m) => m.id));
+    const net = (eng, m) => { try { const s = eng.sellRate(m); return Number.isFinite(s.gpPerHour) ? s.gpPerHour : -Infinity; } catch { return -Infinity; } };
+    const skillBest = new Map();
+    for (const x of this.ranked('best')) if (!skillBest.has(x.m.s)) skillBest.set(x.m.s, x);
+    const cands = [];
+    for (const [id, it] of Object.entries(this.items)) {
+      if (!it.tb?.length || this.tools[id] || /Potion$/.test(it.slot || '')) continue;
+      const hasSource = Number.isFinite(this.buyPrice(id)) || (this.producers.get(id) || []).some((m) => !m.quest) || (this.conversions.get(id) || []).length || (this.bank[id] || 0) > 0;
+      if (!hasSource) continue;
+      const recipes = [...new Set(it.tb.map(([, , , c]) => c.r).filter(Boolean))];
+      const skills = [...new Set(it.tb.map(([, , , c]) => c.e).filter((s) => s && SKILL_ORDER.includes(s)))];
+      // which actions to test: the recipe it names (if you can reach it), else your top methods in its skill
+      let ms = recipes.length
+        ? this.methods.filter((m) => recipes.includes(m.rid) && skills.includes(m.s))
+        : this.ranked('best').filter((x) => skills.includes(x.m.s)).slice(0, 4).map((x) => x.m);
+      // reachable: anything but levels must be met; levels up to 15 away count as training time
+      ms = ms.filter((m) => m.r.every((r) => { const st = this.reqStatus(r); return st.ok || r.t === 'any' || r.t === 'tool' || (st.kind === 'lvl' && st.gap <= 15); }));
+      if (!ms.length) continue;
+      const alt = this.withTool(id);
+      let best = null;
+      for (const m of ms) {
+        const lv = {};
+        for (const r of m.r) if (r.t === 'lvl' && this.level(r.s) < r.l) lv[r.s] = Math.max(lv[r.s] || 0, r.l);
+        const train = Object.entries(lv).reduce((a, [sk, l]) => a + this.trainHours(sk, l), 0);
+        if (!Number.isFinite(train)) continue;
+        const lvAll = Object.keys(lv).length ? { ...this.levels, ...lv } : undefined;
+        const before = unlockedIds.has(m.id) ? net(this, m) : -Infinity;
+        const after = (() => { try { const s2 = alt.sellRate(m, lvAll); return Number.isFinite(s2.gpPerHour) ? s2.gpPerHour : -Infinity; } catch { return -Infinity; } })();
+        if (!Number.isFinite(after)) continue;
+        const base = Math.max(before, skillBest.get(m.s)?.gph ?? 0);
+        const gain = after - base;
+        if (gain > 1 && (!best || gain > best.gain)) best = { m, before: Number.isFinite(before) ? before : null, after, base, gain, train, lv };
+      }
+      if (best) cands.push({ id, it, skill: best.m.s, ...best });
+    }
+    cands.sort((a, b) => b.gain - a.gain);
+    const out = [];
+    for (const c of cands.slice(0, limit * 2)) {
+      const have = (this.bank[c.id] || 0) > 0;
+      const a = have ? null : this.acquire(c.id, 1);
+      const hours = (have ? 0 : a.notes.length || a.missing ? Infinity : a.total) + (c.train || 0);
+      out.push({ ...c, have, acq: a, hours, payback: c.gain > 0 ? hours / c.gain : Infinity });
+    }
+    const res = out.filter((x) => Number.isFinite(x.hours)).sort((a, b) => a.hours * 1e-6 + (a.hours + 1) / a.gain - (b.hours * 1e-6 + (b.hours + 1) / b.gain)).slice(0, limit);
+    this._cache.set('tools', res);
     return res;
   }
 
@@ -2615,6 +2776,12 @@ export class Engine {
       cands.push({ kind: 'gear', id: 'g:' + g.id, title: `${g.src === 'make' ? 'Make' : 'Buy'} ${g.it.n}`, needs: [], actionHours: t.hours, gp: t.gp || 0, gain: g.dGp,
         key: 'enemy:' + g.enemy.id, base: chainBest.get('enemy:' + g.enemy.id) ?? 0,
         why: `+${Math.round(g.dGp).toLocaleString('en-US')} gp/hr fighting ${g.enemy.n}` });
+    }
+    // 3b) toolbelt items worth getting (chest keys, gloves, tools), costed with the item resolver
+    for (const t of this.toolAdvice()) {
+      cands.push({ kind: 'gear', id: 'g:' + t.id, title: `${t.have ? 'Equip' : 'Get'} ${t.it.n}`, needs: [], actionHours: t.hours, gp: 0, gain: t.gain,
+        key: 'skill:' + t.skill, base: chainBest.get('skill:' + t.skill) ?? 0,
+        why: `${t.it.n} on ${t.m.n}: ${Math.round(t.after).toLocaleString('en-US')} gp/hr${t.acq?.steps?.length ? ' · ' + t.acq.steps.slice(-3).map((s) => s.m.n).join(' → ') : ''}` });
     }
     // 4) astrology: study a constellation to the next node and pick the one that pays most
     for (const a of this.astroAdvice()) {

@@ -91,7 +91,21 @@ def short(x):
 def reqs_of(*lists):
     out = []
     for lst in lists:
+        start = len(out)
         for r in lst or []:
+            n0 = len(out)
+            reqs_one(r, out)
+            # IsOr: this requirement is an alternative to the previous one in the same list
+            if (r.get("Data") or {}).get("IsOr") and len(out) > n0 and n0 > start:
+                cur = out.pop()
+                prev = out.pop()
+                out.append({"t": "any", "of": (prev["of"] if prev.get("t") == "any" else [prev]) + [cur]})
+    return out
+
+
+def reqs_one(r, out):
+    if True:
+        if True:
             t, dd = short(r["Type"]), r["Data"]
             if t == "Level":
                 out.append({"t": "lvl", "s": short(dd["Component"]["Entity"]), "l": dd["Level"]})
@@ -120,7 +134,6 @@ def reqs_of(*lists):
                     "AgilityTechniqueLevel": "Agility technique level " + str(dd.get('Level', '')),
                 }.get(t, t)
                 out.append({"t": "other", "k": t, "text": label})
-    return out
 
 
 def iq(lst, qty="Quantity"):
@@ -388,6 +401,7 @@ def main():
         push("Thieving", r, "active", r["BaseInterval"], r["BaseExperience"] / max(1, r["Stages"]), [], loot, gp=gp,
              reqs=reqs_of(r.get("Requirements"), r.get("AccessRequirements"), loc.get("Requirements")),
              extra={"succ": {"t": "thieving", "p": r["Perception"]}, "dmg": r["Damage"], "loc": loc.get("DisplayName"),
+                    **({"pick": short(acc[0]["Data"]["Item"]), "key": short(acc[1]["Data"]["Item"])} if (acc := [a for a in (r.get("AccessRequirements") or []) if short(a["Type"]) == "ToolbeltItemEquipped"]) and len(acc) >= 2 else {}),
                     "stages": r["Stages"], "rt": short(r["RecipeType"]),
                     "x": {"t": "thv", "iv": r["BaseInterval"], "perc": r["Perception"], "st": max(1, r["Stages"]),
                           "cc": r["BaseCommonLootChance"], "rc": r["BaseRareLootChance"], "gc": r["BaseCurrencyLootChance"],

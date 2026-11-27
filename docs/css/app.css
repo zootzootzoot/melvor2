@@ -1188,3 +1188,14 @@ button.ov-n8 { cursor: pointer; }
 .pg-d em { font-style: normal; font-weight: 700; font-size: 13px; }
 @media (max-width: 1080px) { .pg-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .pg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pg-wk b { font-size: 32px; } }
+
+/* one-path earnings */
+.paths { padding: 14px 18px; margin: 14px 0; display: grid; gap: 6px; }
+.pth-head, .pth-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) 80px 80px 90px 90px; gap: 10px; align-items: center; }
+.pth-head { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); font-weight: 700; padding: 0 10px; }
+.pth-head .r, .pth-row .r { text-align: right; }
+.pth-row { padding: 8px 10px; border-radius: 10px; background: rgba(0, 0, 0, .18); border: 1px solid var(--line); font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.pth-row.top { border-color: rgba(243, 196, 99, .4); }
+.pth-main { display: grid; min-width: 0; }
+.pth-main small { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .pth-head, .pth-row { grid-template-columns: 24px minmax(0, 1fr) 80px 70px; } .pth-head span:nth-child(3), .pth-head span:nth-child(4), .pth-row .r:nth-of-type(1), .pth-row .r:nth-of-type(2) { display: none; } }
