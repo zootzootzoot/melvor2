@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=20261127234316';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261127234316';
-import { drawCard } from './card.js?v=20261127234316';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261127234316';
+import { decodeSave } from './save.js?v=20261127234345';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261127234345';
+import { drawCard } from './card.js?v=20261127234345';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261127234345';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -1216,8 +1216,8 @@ function viewOverview() {
   for (const gp of groups) if (gp.kind === 'shop' && gp.list.length > 1) { gp.title = `Buy ${gp.list.length} upgrades`; gp.why = gp.list.map((x) => x.title.replace(/^Buy /, '')).join(', '); }
   const kindLabel = { unlock: 'Unlock', shop: 'Upgrade', gear: 'Gear', quest: 'Quest', astro: 'Astrology' };
   const stepIcon = (st) => (st.kind === 'unlock' ? methodIcon(st.m) : st.kind === 'quest' ? g.skills.Quests?.i : st.kind === 'gear' ? itemIcon(st.id.slice(2)) : st.kind === 'astro' ? g.astro.cons.find((c) => c.id === st.cons)?.i : g.shop[st.id.slice(2)]?.i || skillIcon(st.skill) || g.skills._Shop?.i);
-  const alertIcon = { astro: skillIcon('Astrology'), farm: skillIcon('Farming'), shop: g.skills._Shop?.i, quest: g.skills.Quests?.i, slayer: skillIcon('Slayer'), bank: g.skills.Bank?.i };
-  const alertTarget = (a) => (a.kind === 'astro' ? 'data-tskill-go="Astrology" data-target-go="' + (e.level('Astrology') + 1) + '"' : a.kind === 'quest' ? `data-quest-go="${esc(a.id)}"` : a.kind === 'slayer' ? `data-ready-go="${esc(a.enemy)}"` : a.kind === 'shop' ? 'data-gotab="upgrades"' : `data-gotab="${esc(a.go)}"`);
+  const alertIcon = { prayer: skillIcon('Prayer'), astro: skillIcon('Astrology'), farm: skillIcon('Farming'), shop: g.skills._Shop?.i, quest: g.skills.Quests?.i, slayer: skillIcon('Slayer'), bank: g.skills.Bank?.i };
+  const alertTarget = (a) => (a.kind === 'astro' || a.kind === 'prayer' ? `data-tskill-go="${a.skill}" data-target-go="${e.level(a.skill) + 1}"` : a.kind === 'quest' ? `data-quest-go="${esc(a.id)}"` : a.kind === 'slayer' ? `data-ready-go="${esc(a.enemy)}"` : a.kind === 'shop' ? 'data-gotab="upgrades"' : `data-gotab="${esc(a.go)}"`);
   const opens = (gt) => {
     const names = gt.opened.filter((t) => t.kind !== 'recipe');
     const recipes = gt.opened.filter((t) => t.kind === 'recipe').length;

@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234316';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234345';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -2447,6 +2447,14 @@ export class Engine {
       const plan = this.combatPlan(t.enemy, 'money');
       if (!plan) alerts.push({ kind: 'slayer', text: `Your slayer task (${C.enemies[t.enemy]?.n || t.enemy}) isn't safe with your gear: reroll it or get ready`, go: 'money', enemy: t.enemy });
     }
+    // bones in the bank + a prayer on while you fight = Prayer XP for almost nothing
+    try {
+      const po = this.prayerTrainOptions().find((o) => o.enemy === best?.m?.x?.e) || this.prayerTrainOptions()[0];
+      if (po && po.ppHave > 0 && po.bankHours > 0.25) {
+        const to = levelFromXp((p.skills?.Prayer?.xp || 0) + po.xph * po.bankHours);
+        if (to > this.level('Prayer')) alerts.push({ kind: 'prayer', text: `Turn on ${this.g.prayer.prayers[po.prayer]?.n} while you fight ${this.g.combat.enemies[po.enemy]?.n}: your bones cover ${fmtDuration(po.bankHours)}, Prayer ${this.level('Prayer')} → ${to}`, go: 'train', skill: 'Prayer' });
+      }
+    } catch { /* no prayer data */ }
     let leftovers = null;
     try { leftovers = this.leftovers().skills.filter((x) => x.saved > 0.5).sort((a, b) => b.saved - a.saved)[0] || null; } catch { leftovers = null; }
     if (leftovers) alerts.push({ kind: 'bank', text: `Your bank holds ${leftovers.skill} ${leftovers.from} → ${leftovers.to} worth of XP (saves ${fmtDuration(leftovers.saved)} of training)`, go: 'bank' });
