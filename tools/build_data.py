@@ -171,6 +171,20 @@ def bonuses_of(B):
     return out
 
 
+def combat_bonuses(B):
+    """Combat bonuses from worn gear or prayers: [stat, value, {style, stat, rune, ammo, effect, cond}]."""
+    out = []
+    for b in ((B or {}).get("Component") or []):
+        if not b.get("Stat"):
+            continue
+        lc = b.get("LocalContext") or {}
+        ctx = {k2: short(lc.get(k1)) for k1, k2 in (("CombatStyle", "style"), ("CombatStat", "stat"), ("Rune", "rune"), ("AmmoType", "ammo"), ("Effect", "effect")) if lc.get(k1)}
+        if b.get("Condition"):
+            ctx["cond"] = short(b["Condition"]["Type"])
+        out.append([b["Stat"]["Name"], b["Value"], ctx])
+    return out
+
+
 def table(lst):
     """Weighted drop table -> [[item, weight, min, max]]"""
     return [[short(x["Item"]), x["Weight"], x.get("MinQuantity", x.get("Quantity", 1)), x.get("MaxQuantity", x.get("Quantity", 1))]
@@ -268,15 +282,7 @@ def main():
                 "r": reqs_of(eq.get("Requirements")),
             }
             # bonuses the item gives while worn: [stat, value, {style, stat, rune, ammo, effect, cond}]
-            eb = []
-            for b in ((eq.get("Bonuses") or {}).get("Component") or []):
-                if not b.get("Stat"):
-                    continue
-                lc = b.get("LocalContext") or {}
-                ctx = {k2: short(lc.get(k1)) for k1, k2 in (("CombatStyle", "style"), ("CombatStat", "stat"), ("Rune", "rune"), ("AmmoType", "ammo"), ("Effect", "effect")) if lc.get(k1)}
-                if b.get("Condition"):
-                    ctx["cond"] = short(b["Condition"]["Type"])
-                eb.append([b["Stat"]["Name"], b["Value"], ctx])
+            eb = combat_bonuses(eq.get("Bonuses"))
             if eb:
                 items[it["Id"]]["eq"]["b"] = eb
         wp = caps.get(NS + "Weapon")
@@ -714,7 +720,7 @@ def main():
     prayer = {
         "prayers": {pr["Id"]: {"n": pr["DisplayName"], "i": icon(pr.get("Icon")), "slot": short(pr.get("FitsInSlot")), "cost": (pr.get("Cost") or {}).get("Quantity", 1),
                                "on": "e" if short(((((pr.get("ConsumesOn") or {}).get("Data") or {}).get("Character") or {}).get("Component"))) == "Enemy" else "p",
-                               "r": reqs_of(pr.get("UnlockRequirements")), "b": bonuses_of(pr.get("Bonuses"))} for pr in O.get("Prayer") or []},
+                               "r": reqs_of(pr.get("UnlockRequirements")), "b": bonuses_of(pr.get("Bonuses")), "cb": combat_bonuses(pr.get("Bonuses"))} for pr in O.get("Prayer") or []},
         "bones": {it["Id"]: ((it.get("Capabilities") or {}).get(NS + "Bury") or {}).get("CurrencyGain", {}).get("Quantity", 0)
                   for it in O["Item"] if (it.get("Capabilities") or {}).get(NS + "Bury")},
     }

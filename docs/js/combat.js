@@ -22,16 +22,16 @@ export function combatLevels(save, override = {}) {
 }
 
 /** A fighter from an explicit loadout: { slot: item } plus an optional spell. */
-export function makeFighter(g, lv, gear, spell = null) {
+export function makeFighter(g, lv, gear, spell = null, extra = []) {
   const C = g.combat;
   const st = {};
   let pow = 0, prot = 0;
   // bonuses worn gear gives (always-on ones; slayer-task-only bonuses are left out)
-  const mods = { maxHit: {}, minHitPct: 0, minHit: {}, intervalPct: 0, intervalFlat: 0, evaPct: 0, protPct: 0, powStyle: {}, lootDouble: 0, coinDouble: 0, coinPct: 0, ammoPres: 0, runePres: 0, runeCost: {} };
+  const mods = { accPct: 0, maxHit: {}, minHitPct: 0, minHit: {}, intervalPct: 0, intervalFlat: 0, evaPct: 0, protPct: 0, powStyle: {}, lootDouble: 0, coinDouble: 0, coinPct: 0, ammoPres: 0, runePres: 0, runeCost: {} };
   const styleKey = (c) => c.style || '*';
-  for (const item of Object.values(gear)) {
-    const e = item && g.items[item]?.eq;
-    if (!e) continue;
+  const sources = Object.values(gear).map((item) => item && g.items[item]?.eq).filter(Boolean);
+  if (extra?.length) sources.push({ st: {}, pow: 0, prot: 0, b: extra }); // e.g. an active prayer
+  for (const e of sources) {
     for (const [k, v] of Object.entries(e.st)) st[k] = (st[k] || 0) + v;
     pow += e.pow; prot += e.prot;
     for (const [n, v, c] of e.b || []) {
@@ -42,6 +42,7 @@ export function makeFighter(g, lv, gear, spell = null) {
       else if (n === 'PercentAttackInterval') mods.intervalPct += v;
       else if (n === 'FlatAttackInterval') mods.intervalFlat += v;
       else if (n === 'PercentEvasionRating') mods.evaPct += v;
+      else if (n === 'PercentAccuracyRating') mods.accPct += v;
       else if (n === 'PercentProtectionRating') mods.protPct += v;
       else if (n === 'FlatProtectionRating') prot += v;
       else if (n === 'FlatPowerRating') { if (c.style) mods.powStyle[c.style] = (mods.powStyle[c.style] || 0) + v; else pow += v; }
@@ -83,7 +84,9 @@ function rating(C, f, stance, kind) {
   const s = C.stances[stance];
   const style = C.styles[s.style];
   const r = Math.max(1, Math.floor((ratio(kind === 'acc' ? style.acc : style.eva, f.lv) + 9) * ((f.st[kind === 'acc' ? s.acc : s.eva] || 0) + 64)));
-  return kind === 'eva' && f.mods?.evaPct ? Math.floor(r * (1 + f.mods.evaPct)) : r;
+  if (kind === 'eva' && f.mods?.evaPct) return Math.floor(r * (1 + f.mods.evaPct));
+  if (kind === 'acc' && f.mods?.accPct) return Math.floor(r * (1 + f.mods.accPct));
+  return r;
 }
 
 export function maxHit(C, f, style) {

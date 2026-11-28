@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234345';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234506';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -548,6 +548,27 @@ export class Engine {
       const ins = this.combatInputs(res.f, res.p);
       res.gph = (HOUR / res.f.killMs) * (lootOf(res.p) - this.inputCost(ins));
       res.ins = ins;
+      // a prayer on top: its bonus against the bones it burns (points at your cheapest bones' sell value)
+      if (!skill && this.g.prayer) {
+        const P = this.g.prayer;
+        const bones = Object.entries(P.bones).filter(([, pp]) => pp > 0).map(([id, pp]) => ({ id, pp, per: this.value(id) / pp, have: this.bank[id] || 0 }));
+        const bone = bones.filter((b) => b.have > 0).sort((a, b) => a.per - b.per)[0] || bones.sort((a, b) => a.per - b.per)[0];
+        const lvp = { ...this.levels, ...(lvOverride || {}) };
+        let bestPr = null;
+        for (const [pid, pr] of Object.entries(P.prayers)) {
+          if (pr.slot !== 'CombatPrayer' || !(pr.cb || []).some(([n]) => n !== 'NoDeathPenalty') || !(pr.r || []).every((r) => this.reqStatus(r, lvp).ok)) continue;
+          const fp = makeFighter(this.g, lv, res.gear, res.spell, pr.cb);
+          const f2 = fight(C, fp, enemy);
+          if (!f2 || !viable(f2)) continue;
+          const turns = pr.on === 'e' ? f2.aliveMs / (enemy.interval || 3000) : f2.attacks;
+          const ppKill = turns * pr.cost;
+          const ins2 = this.combatInputs(f2, fp);
+          if (bone) ins2.push([bone.id, ppKill / bone.pp]); // bones buried for the points
+          const g2 = (HOUR / f2.killMs) * (lootOf(fp) - this.inputCost(ins2));
+          if (g2 > res.gph * 1.01 && (!bestPr || g2 > bestPr.gph)) bestPr = { id: pid, n: pr.n, gph: g2, f: f2, p: fp, ins: ins2, pph: (HOUR / f2.killMs) * ppKill, bone: bone?.id, gain: g2 - res.gph };
+        }
+        if (bestPr) res = { ...res, f: bestPr.f, p: bestPr.p, ins: bestPr.ins, gph: bestPr.gph, prayer: bestPr };
+      }
     }
     this._combatCache.set(key, res);
     return res;
