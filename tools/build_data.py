@@ -710,6 +710,15 @@ def main():
     from PIL import Image
     written = 0
     missing = 0
+    # prayers: cost in prayer points, spent on your attack turn ("p") or the enemy's ("e"); bones give points when buried
+    prayer = {
+        "prayers": {pr["Id"]: {"n": pr["DisplayName"], "i": icon(pr.get("Icon")), "slot": short(pr.get("FitsInSlot")), "cost": (pr.get("Cost") or {}).get("Quantity", 1),
+                               "on": "e" if short(((((pr.get("ConsumesOn") or {}).get("Data") or {}).get("Character") or {}).get("Component"))) == "Enemy" else "p",
+                               "r": reqs_of(pr.get("UnlockRequirements")), "b": bonuses_of(pr.get("Bonuses"))} for pr in O.get("Prayer") or []},
+        "bones": {it["Id"]: ((it.get("Capabilities") or {}).get(NS + "Bury") or {}).get("CurrencyGain", {}).get("Quantity", 0)
+                  for it in O["Item"] if (it.get("Capabilities") or {}).get(NS + "Bury")},
+    }
+
     for res, name in icons.items():
         dst = os.path.join(OUT, "icons", name)
         if os.path.exists(dst):
@@ -894,14 +903,7 @@ def main():
         "gameVersion": "Alpha 0.11.7 (save v32)",
         "items": items, "buy": buy, "shop": shop, "methods": methods, "skills": skills, "currencies": cur_icons,
         "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat, "quests": quests, "astro": astro, "farm": farm, "agility": agility,
-        # prayers: cost in prayer points, spent on your attack turn ("p") or the enemy's ("e"); bones give points when buried
-        "prayer": {
-            "prayers": {pr["Id"]: {"n": pr["DisplayName"], "i": icon(pr.get("Icon")), "slot": short(pr.get("FitsInSlot")), "cost": (pr.get("Cost") or {}).get("Quantity", 1),
-                                   "on": "e" if short(((((pr.get("ConsumesOn") or {}).get("Data") or {}).get("Character") or {}).get("Component"))) == "Enemy" else "p",
-                                   "r": reqs_of(pr.get("UnlockRequirements")), "b": bonuses_of(pr.get("Bonuses"))} for pr in O.get("Prayer") or []},
-            "bones": {it["Id"]: ((it.get("Capabilities") or {}).get(NS + "Bury") or {}).get("CurrencyGain", {}).get("Quantity", 0)
-                      for it in O["Item"] if (it.get("Capabilities") or {}).get(NS + "Bury")},
-        },
+        "prayer": prayer,
         # bank upgrades: combine items into an upgraded item (instant)
         "upgrades": [{"id": u["Id"], "out": short(u["UpgradedItem"]), "q": u.get("QuantityPerUpgrade") or 1, "in": iq((u.get("Costs") or {}).get("Items")),
                       "gp": sum(c["Quantity"] for c in (u.get("Costs") or {}).get("Currencies") or [] if short(c["Currency"]) == "GoldPieces"),
