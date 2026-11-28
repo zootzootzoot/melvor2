@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127233658';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234044';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -21,8 +21,11 @@ export const PASSIVE_SKILLS = new Set(['Farming', 'Ranching']);
 const STATS_TYPE = {
   Woodcutting: 'WoodcuttingAction', Mining: 'MiningAction', Fishing: 'FishingAction', Thieving: 'ThievingAction',
   Cooking: 'CookingAction', Herblore: 'HerbloreAction', Firemaking: 'FiremakingAction', Farming: 'FarmingAction',
-  Hunting: 'HuntingAction', Ranching: 'RanchingAction', Astrology: 'AstrologyAction',
+  Hunting: 'HuntingAction', Ranching: 'RanchingAction', Astrology: 'AstrologyAction', Agility: 'Agility',
 };
+/** Agility technique levels: their own XP curve (AgilityTechniqueExperienceTable), capped per technique. */
+const techXpFor = (l) => (l < 1 ? 0 : Math.floor((1 / 6) * (l * l - l + 600 * ((Math.pow(2, l / 3.25) - Math.pow(2, 1 / 3.25)) / (Math.pow(2, 1 / 3.25) - 1)))));
+export const techLevelFromXp = (xp, cap = 40) => { let l = 1; while (l < cap && techXpFor(l + 1) <= xp) l++; return l; };
 const statsTypeOf = (skill) => STATS_TYPE[skill] || 'ArtisanAction';
 const STAT_GROUPS = { PercentInterval: 'GlobalPercentActionInterval', FlatInterval: 'GlobalFlatActionInterval' };
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
@@ -560,6 +563,11 @@ export class Engine {
 
   level(skill) { return this.levels?.[skill] ?? 1; }
 
+  techLevel(tech) {
+    if (this.p?.allGuild) return this.g.agility?.tech?.[tech]?.cap || 40;
+    return techLevelFromXp(this.p?.techniques?.[tech] || 0, this.g.agility?.tech?.[tech]?.cap || 40);
+  }
+
   ctxMatch(ctx, m, item) {
     if (ctx.x) return false;
     if (ctx.e && ctx.e !== m.s) return false;
@@ -700,6 +708,42 @@ export class Engine {
       for (const [it, q, ch] of x.hit) add(it, clamp01((ch + M('FlatOnHitItemChance', it)) * (1 + M('PercentOnHitItemChance', it))) * (q + Math.trunc(M('FlatOnHitItemQuantity', it))) * (1 + d) * hits);
       for (const [it, q, ch] of x.cut) add(it, clamp01((ch + M('FlatOnCutItemChance', it)) * (1 + M('PercentOnCutItemChance', it))) * (q + Math.trunc(M('FlatOnCutItemQuantity', it))) * (1 + d));
       extra = { hits, iv, hp };
+    } else if (x.t === 'agil') {
+      // a lap: every obstacle in order; a fall sends you back to the start, so obstacle k is attempted 1/(p_k..p_n) times per lap
+      const trap = Math.min(0.95, 0.8 + M('FlatTrapSuccessChance'));
+      const obs = x.obs.map(([iv, tech, diff, dmg, isTrap]) => {
+        const lvl = tech ? this.techLevel(tech) : 0;
+        const d = Math.max(0, diff + M('FlatObstacleDifficulty'));
+        const over = d - lvl + 1;
+        const p = isTrap ? trap : !tech ? 0.6 : over > 0 ? Math.pow(0.95, over / 2) : 1;
+        // a technique's own bonus applies on obstacles whose difficulty you've met (Evading: faster obstacles)
+        const met = tech && lvl >= d ? (this.g.agility?.tech?.[tech]?.b || []) : [];
+        const ivPct = met.filter(([, n]) => n === 'PercentInterval').reduce((a, b) => a + b[2], 0);
+        return { t: Math.max(100, Math.floor((iv + M('FlatInterval')) * (1 + M('PercentInterval') + ivPct))), p: clamp01(p), dmg };
+      });
+      const att = new Array(obs.length);
+      let after = 1;
+      for (let k = obs.length - 1; k >= 0; k--) { after /= Math.max(obs[k].p, 1e-6); att[k] = after; }
+      ms = obs.reduce((a, o, k) => a + att[k] * o.t, 0);
+      const starts = att[0] || 1;
+      const avoid = clamp01(M('AvoidDamageChance'));
+      const taken = obs.reduce((a, o, k) => a + att[k] * (1 - o.p) * (1 + o.dmg) / 2, 0) * (1 - avoid) * (1 + M('PercentDamageTaken'));
+      const d = clamp01(M('DoublingChance'));
+      ins = [];
+      const keepEntry = clamp01(M('EntryCostPreservationChance'));
+      for (const [it, q] of x.entry) ins.push([it, q * starts * (1 - keepEntry)]);
+      if (taken > 0 && this.food) ins.push([this.food, taken / this.items[this.food].heal]);
+      for (const [it, q, ch] of x.rand) add(it, (q + M('FlatObstacleRewardQuantity')) * (1 + M('PercentObstacleRewardQuantity')) * clamp01(ch * (1 + M('IncreasedObstacleRewardChance')) + M('FlatObstacleRewardChance')) * (1 + d));
+      for (const [it, q] of x.rew) add(it, q * (1 + M('PercentRewardQuantity')));
+      // timed rewards: the first tier your clean lap beats is rolled once
+      const lap = obs.reduce((a, o) => a + o.t, 0);
+      const tier = x.timed.find(([t]) => lap <= t);
+      if (tier) for (const [it, q] of tier[2]) add(it, q * tier[1]);
+      gp = x.gp || 0;
+      xp = m.xp;
+      const success = obs.reduce((a, o) => a * o.p, 1);
+      const techs = [...new Set(x.obs.map((o) => o[1]).filter(Boolean))];
+      extra = { lapMs: lap, success, starts, taken, techs: techs.map((t) => [t, this.techLevel(t)]), maxDmg: Math.max(0, ...x.obs.map((o) => o[3])) };
     } else if (x.t === 'astro') {
       ms = Math.floor((x.iv + M('FlatInterval')) * (1 + M('PercentInterval')));
       extra = { knowledge: x.k * (1 + M('PercentKnowledge')) };

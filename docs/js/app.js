@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=20261127233658';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261127233658';
-import { drawCard } from './card.js?v=20261127233658';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261127233658';
+import { decodeSave } from './save.js?v=20261127234044';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261127234044';
+import { drawCard } from './card.js?v=20261127234044';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261127234044';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -34,6 +34,8 @@ const MODES = {
 };
 // older views still reachable from links (bank-limited rates, value added)
 const HIDDEN_MODES = { bank: { label: 'From your bank' }, sell: { label: 'Value added' } };
+/** Skills outside the main order that the site can train (they open in Skills). */
+const TRAINABLE_EXTRA = new Set(['Astrology', 'Agility', 'Attack', 'Strength', 'Defence', 'Hitpoints', 'Ranged', 'Magic', 'Slayer']);
 const TABS = {
   overview: 'Overview', plan: 'Plan', money: 'Money', train: 'Skills', quests: 'Quests', farm: 'Farm', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks', items: 'Items',
 };
@@ -359,7 +361,7 @@ function renderDashboard() {
       if (PASSIVE_SKILLS.has(k)) return `<span class="skill-chip" title="${esc(k)} · ${fmtNum(v.xp)} xp">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}${d > 0 ? `<em class="up">+${d}</em>` : ''}</div><div class="nm">${esc(k)}</div></div><span class="bar" style="width:${pct}%"></span></span>`;
       return `<button class="skill-chip" data-train="${esc(k)}" title="${esc(k)} · ${fmtNum(v.xp)} xp · open in Training">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}${d > 0 ? `<em class="up">+${d}</em>` : ''}</div><div class="nm">${esc(k)}</div></div><span class="bar" style="width:${pct}%"></span></button>`;
     }).join('')}
-    ${others.length ? `<span class="strip-sep"></span>` + others.map(([k, v]) => `<span class="skill-chip dim" title="${esc(k)} · not modelled yet">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}</div><div class="nm">${esc(k)}</div></div></span>`).join('') : ''}
+    ${others.length ? `<span class="strip-sep"></span>` + others.map(([k, v]) => (TRAINABLE_EXTRA.has(k) ? `<button class="skill-chip" data-train="${esc(k)}" title="${esc(k)} · ${fmtNum(v.xp)} xp · open in Skills">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}</div><div class="nm">${esc(k)}</div></div></button>` : `<span class="skill-chip dim" title="${esc(k)} · not modelled yet">${img(g.skills[k].i, k, 24)}<div><div class="lvl num">${v.level}</div><div class="nm">${esc(k)}</div></div></span>`)).join('') : ''}
   </div>`;
   app.innerHTML = '<div id="head"></div><div id="view"></div>';
   state.bindHead = (root) => {
@@ -838,7 +840,7 @@ function chainTree(chain) {
 // ---------------------------------------------------------------- training
 function viewTrain() {
   const e = E(), g = G(), s = state.save;
-  const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k)), ...(e.methods.some((m) => m.s === 'Astrology') ? ['Astrology'] : []), ...(state.explorer ? [] : [...COMBAT_SKILLS, 'Slayer'])];
+  const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k)), ...['Astrology', 'Agility'].filter((k) => e.methods.some((m) => m.s === k)), ...(state.explorer ? [] : [...COMBAT_SKILLS, 'Slayer'])];
   if (!skills.includes(state.trainSkill)) {
     // default: the skill closest to its next level by time
     state.trainSkill = skills.map((k) => ({ k, o: e.trainOptions(k)[0] })).filter((x) => x.o).sort((a, b) => {

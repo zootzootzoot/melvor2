@@ -490,6 +490,41 @@ def main():
         if cap:
             farm["compost"][it["Id"]] = {"b": bonuses_of({"Component": cap.get("CompostModifierTemplate") or []})}
 
+    # Agility: each course path is a method. A lap is a run of obstacles; a failed obstacle sends you back to the start.
+    # Success per obstacle = 0.95^((difficulty - technique level + 1) / 2), certain once the technique level reaches it;
+    # traps 0.8 (+ bonuses, max 0.95). Entry costs are paid on every start, including restarts after a fall.
+    ag_paths = {p["Id"]: p for p in O.get("AgilityCoursePath") or []}
+    ag_obs = {x["Id"]: x for x in O.get("AgilityObstacle") or []}
+    ag_loc = {x["Id"]: x for x in O.get("AgilityLocation") or []}
+    for c in O.get("AgilityCourse") or []:
+        loc = ag_loc.get(short(c.get("Location")), {})
+        for pid in c.get("Paths") or []:
+            p = ag_paths.get(short(pid))
+            if not p:
+                continue
+            obs = []
+            for oid in p.get("Obstacles") or []:
+                x = ag_obs.get(short(oid))
+                if x:
+                    obs.append([x["BaseInterval"], short(x.get("Technique")), x.get("Difficulty", 0), x.get("Damage", 0), bool(x.get("IsTrap"))])
+            if not obs:
+                continue
+            ec = c.get("EntryCost") or {}
+            cr = c.get("CompletionRewards") or {}
+            timed = [[t["TimeInMS"], t.get("Chance", 1), iq(t.get("Items"))] for t in sorted(c.get("TimedCompletionRewards") or [], key=lambda t: t["TimeInMS"])]
+            name = c["DisplayName"] + ("" if len(c.get("Paths") or []) == 1 else " · " + (p.get("DisplayName") or ""))
+            push("Agility", {**c, "Id": c["Id"] + "_" + p["Id"], "Category": c.get("Location"), "Icon": loc.get("Icon")}, "active",
+                 sum(o[0] for o in obs), p.get("BaseExperience", 0), [], {}, name=name,
+                 reqs=reqs_of(c.get("Requirements"), loc.get("Requirements")),
+                 extra={"loc": loc.get("DisplayName"), **({"quest": True} if any(short(d.get("Type")) == "QuestStepActive" for d in loc.get("DisplayRequirements") or []) else {}), "x": {
+                     "t": "agil", "obs": obs, "txp": p.get("BaseTechniqueExperience", 0), "gtx": bool(c.get("GivesTechniqueXP")),
+                     "rand": iqc(p.get("RandomObstacleProducts")), "rew": iq(cr.get("Items")),
+                     "gp": sum(x["Quantity"] for x in cr.get("Currencies") or [] if short(x["Currency"]) == "GoldPieces"),
+                     "entry": iq(ec.get("Items")), "timed": timed}})
+    agility = {"tech": {t["Id"]: {"n": t["DisplayName"], "i": icon(t.get("Icon")), "cap": t.get("LevelCap", 40),
+                                  "r": reqs_of(t.get("UnlockRequirements")), "b": bonuses_of({"Component": t.get("DifficultyMetBonuses") or []})}
+                        for t in O.get("AgilityTechnique") or []}}
+
     # Hunting: survey (3rd always succeeds) -> track N steps -> trap attempts; each attempt uses a trap.
     hunt_loc = {c["Id"]: c for c in O["HuntingLocation"]}
     traps_by_type = {}
@@ -858,7 +893,7 @@ def main():
         "v": 1,
         "gameVersion": "Alpha 0.11.7 (save v32)",
         "items": items, "buy": buy, "shop": shop, "methods": methods, "skills": skills, "currencies": cur_icons,
-        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat, "quests": quests, "astro": astro, "farm": farm,
+        "shopCats": shop_cats, "shopSubs": shop_subs, "recipeCats": cat_names, "guild": guild, "pets": pets, "combat": combat, "quests": quests, "astro": astro, "farm": farm, "agility": agility,
         # bank upgrades: combine items into an upgraded item (instant)
         "upgrades": [{"id": u["Id"], "out": short(u["UpgradedItem"]), "q": u.get("QuantityPerUpgrade") or 1, "in": iq((u.get("Costs") or {}).get("Items")),
                       "gp": sum(c["Quantity"] for c in (u.get("Costs") or {}).get("Currencies") or [] if short(c["Currency"]) == "GoldPieces"),

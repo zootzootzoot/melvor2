@@ -2,7 +2,7 @@
 // Save string = Base64( Brotli( SaveWriter stream ) ). The game flushes the Brotli
 // stream without closing it, so the stream is "truncated" by design: we decode
 // with a streaming decoder and accept NeedsMoreInput at the end.
-import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=20261127233658';
+import initBrotli, { initSync, DecompressStream, BrotliStreamResultCode as RC } from './vendor/brotli_dec_wasm.js?v=20261127234044';
 
 let brotliReady = null;
 /** For Node tests: initialise the decoder from wasm bytes instead of fetching it. */
@@ -392,10 +392,20 @@ export async function decodeSave(input) {
       }
     }, null);
   }
+  // Agility/Techniques: int n × (string technique, region{technique XP state: double xp, ...})
+  const techniques = {};
+  const tc = ents.Agility?.Techniques;
+  if (tc) {
+    safe('agility techniques', () => {
+      const r = new Reader(raw, tc.pos);
+      const n = r.i32();
+      for (let i = 0; i < n; i++) { const id = short(r.str()); const len = r.i32(); const e = r.p + len; try { techniques[id] = r.f64(); } catch { /* skip */ } r.p = e; }
+    }, null);
+  }
   // one lookup across every statistics table: stats.all[statistic][id] = value
   stats.all = {};
   for (const kind of ['items', 'currencies', 'enemies', 'dungeons', 'styles', 'effects', 'prayers']) for (const [k, v] of Object.entries(stats[kind])) stats.all[k] = { ...(stats.all[k] || {}), ...v };
   const components = Object.fromEntries(Object.entries(ents).map(([k, v]) => [k, Object.keys(v)]));
-  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, quests, slayer, astro, farm, problems, entities: Object.keys(ents), components };
+  return { header, skills, bank, wallet, shop, tools, guild, stats, pets, equipment, quests, slayer, astro, farm, techniques, problems, entities: Object.keys(ents), components };
 }
 export { brotliDecode as _brotliDecode, Reader as _Reader, readHeader as _readHeader, readEntities as _readEntities };
