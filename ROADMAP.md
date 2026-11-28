@@ -3,6 +3,7 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Skill unlock conditions (e.g. Thieving needs Cooking 10, Ranching needs 20k gold from sales and 200 logs) on every method, checked against the save's statistics
 - Prayer bonuses inside fights, kept only when they out-earn the bones they burn
 - Prayer training: XP from fighting with prayers on, prayer points and bones per hour, banked bones
 - Agility modelled: courses, obstacle success from technique levels, falls and restarts, tickets, marks and timed rewards; Agility in Skills and level routes

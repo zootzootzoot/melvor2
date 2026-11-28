@@ -101,7 +101,7 @@ Only shop purchases registered in the Shop entity config count as buyable. Some 
 
 ## How the numbers are computed
 
-Rates use the game's own stat computers and action handlers, with your bonuses applied. Bonuses come from:
+Rates use the game's own stat computers and action handlers, with your bonuses applied. Every method also carries its skill's own unlock condition (for example Thieving needs Cooking 10, Cooking needs 20 Raw Shrimp caught, Ranching needs 20,000 gold from sales and 200 Normal Logs), checked against your save's statistics until you have XP in that skill. Bonuses come from:
 
 - owned shop upgrades;
 - equipped toolbelt items;

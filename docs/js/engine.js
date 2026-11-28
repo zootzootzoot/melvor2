@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234506';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234625';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -632,6 +632,16 @@ export class Engine {
 
   reqStatus(r, levelOverride) {
     switch (r.t) {
+      case 'skill': {
+        // a skill's own unlock: met once you have any XP in it, otherwise check what it asks for
+        if ((this.p.skills?.[r.s]?.xp || 0) > 0 || this.p.allGuild) return { ok: true, known: true, text: `${r.s} unlocked`, kind: 'skill' };
+        const sub = r.of.map((q) => this.reqStatus(q, levelOverride));
+        const miss = sub.filter((x) => !x.ok);
+        if (!miss.length) return { ok: true, known: sub.every((x) => x.known), text: `${r.s} unlocked`, kind: 'skill' };
+        const lvMiss = miss.filter((x) => x.kind === 'lvl');
+        return { ok: false, known: true, text: `Unlock ${r.s}: ${miss.map((x) => x.text).join(', ')}`, kind: lvMiss.length === miss.length ? 'lvl' : 'skill',
+          skill: lvMiss[0]?.skill, need: lvMiss[0]?.need, gap: lvMiss.reduce((a, x) => Math.max(a, x.gap || 0), 0), unlocks: r.s };
+      }
       case 'any': {
         const opts = r.of.map((q) => this.reqStatus(q, levelOverride));
         const met = opts.find((o) => o.ok);

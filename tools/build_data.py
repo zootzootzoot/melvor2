@@ -115,6 +115,16 @@ def reqs_one(r, out):
                 out.append({"t": "tool", "item": short(dd["Item"])})
             elif t == "QuestComplete":
                 out.append({"t": "quest", "id": short(dd["Quest"])})
+            elif t in ("ItemStatistic", "CurrencyStatistic", "HuntingAnimalStatistic", "FarmingRecipe") and dd.get("Statistic"):
+                key = short(dd.get("Item") or dd.get("Currency") or dd.get("Animal") or dd.get("Recipe"))
+                what = re.sub(r"([a-z])([A-Z])", r"\1 \2", key or "")
+                stat = short(dd.get("Statistic"))
+                verb = {"BankCurrencyFromSale": "Earn", "HuntingAnimalTrapped": "Trap", "FarmingRecipeHarvested": "Harvest", "BankItemFound": "Find"}.get(stat)
+                if not verb:
+                    verb = "Gain" if stat.endswith("ItemGained") else "Make"
+                n = dd.get("Value", 1)
+                label = f"Earn {n:,} gold from sales" if stat == "BankCurrencyFromSale" else f"{verb} {n:,} {what}"
+                out.append({"t": "stat", "stat": stat, "key": key, "n": n, "text": label})
             elif t in ("EnemyStatistic", "SlayerMasterStatistic"):
                 key = short(dd.get("Enemy") or dd.get("Master"))
                 label = (f"Kill {dd.get('Value')} " if t == "EnemyStatistic" else f"{dd.get('Value')} slayer tasks for ") + re.sub(r"([a-z])([A-Z])", r"\1 \2", key or "")
@@ -245,6 +255,12 @@ def main():
         icons[res] = name
         return name
 
+    # what opens each skill (and the shop): levels in other skills, or something done (e.g. Thieving needs Cooking 10)
+    skill_unlock = {}
+    for nav in O.get("SkillNavigationOption") or []:
+        if nav.get("Requirements"):
+            skill_unlock[nav["Id"]] = reqs_of(nav["Requirements"])
+
     # skill membership from entity config
     skill_of = {}
     for ent, cfg in EC.items():
@@ -345,6 +361,8 @@ def main():
         cat = short(r.get("Category"))
         is_quest = cat in quest_cats  # quest-only actions: kept for quest estimates, hidden from rankings
         rq = reqs if reqs is not None else reqs_of(r.get("Requirements"), cat_reqs.get(cat))
+        if skill_unlock.get(skill):
+            rq = rq + [{"t": "skill", "s": skill, "of": skill_unlock[skill]}]
         m = {
             "id": f"{skill}:{r['Id']}", "s": skill, "n": name or (r["DisplayName"] if isinstance(r["DisplayName"], str) else r["DisplayName"]["Singular"]),
             "i": icon(icon_res or r.get("Icon") or r.get("Media")), "k": kind, "ms": round(ms, 3), "xp": xp,
