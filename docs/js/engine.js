@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234044';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234217';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -1363,6 +1363,7 @@ export class Engine {
     const key = 'train|' + skill + '|' + level;
     if (this._cache.has(key)) return this._cache.get(key);
     if (COMBAT_SKILLS.includes(skill)) { const rows = this.combatTrainOptions(skill, level); this._cache.set(key, rows); return rows; }
+    if (skill === 'Prayer') { const rows = this.prayerTrainOptions(level); this._cache.set(key, rows); return rows; }
     if (skill === 'Slayer') {
       const rows = this.slayerOptions(level).filter((o) => o.ok && o.viable > 0).map((o) => ({
         m: { id: 'Slayer:' + o.id, s: 'Slayer', n: o.sm.n, i: o.sm.i, lv: 1, in: [], out: [], r: o.sm.r, primary: null },
@@ -2301,6 +2302,49 @@ export class Engine {
     };
     this._cache.set('progress', res);
     return res;
+  }
+
+  // ---------------------------------------------------------------- prayer
+  /**
+   * Prayer XP comes from fighting with a prayer on: each hit you land gives sqrt(3 + 0.2 × damage × prayer cost) XP, and the
+   * prayer spends its cost in points on every attack turn (yours or the enemy's). Points come from burying bones.
+   * Rows: your best fights × the prayers you have, with XP/hr, points/hr, and the bones that takes.
+   */
+  prayerTrainOptions(level = this.level('Prayer')) {
+    const P = this.g.prayer;
+    if (!P || !this.g.combat) return [];
+    const lv = { ...this.levels, Prayer: level };
+    const prayers = Object.entries(P.prayers).filter(([, pr]) => pr.slot === 'CombatPrayer' && (pr.r || []).every((r) => this.reqStatus(r, lv).ok));
+    if (!prayers.length) return [];
+    // points: your cheapest bones per point (sell value given up), the bank's first
+    const bones = Object.entries(P.bones).filter(([, pp]) => pp > 0).map(([id, pp]) => ({ id, pp, per: this.value(id) / pp, have: this.bank[id] || 0 }))
+      .sort((a, b) => a.per - b.per);
+    const owned = bones.filter((b) => b.have > 0);
+    const bone = owned[0] || bones[0];
+    const ppHave = owned.reduce((a, b) => a + b.have * b.pp, 0);
+    const xpMult = 1 + this.mod({ s: 'Prayer' }, 'PercentXPGained', null, 'Experience');
+    const fights = this.ranked('best').filter((x) => x.m.x?.t === 'fight').slice(0, 6);
+    const rows = [];
+    for (const x of fights) {
+      const plan = this.combatPlan(x.m.x.e, 'money');
+      if (!plan) continue;
+      const f = plan.f, enemy = this.g.combat.enemies[x.m.x.e];
+      const share = f.aliveMs / f.killMs; // time spent fighting rather than waiting for a respawn
+      const myTurns = (HOUR / plan.p.interval) * share, theirTurns = (HOUR / (enemy.st.AttackInterval || 3000)) * share;
+      const hits = myTurns * f.hc;
+      for (const [pid, pr] of prayers) {
+        const xph = hits * Math.sqrt(3 + 0.2 * f.dmg * pr.cost) * xpMult;
+        const pph = (pr.on === 'e' ? theirTurns : myTurns) * pr.cost;
+        const boneHr = bone ? pph / bone.pp : Infinity;
+        rows.push({
+          m: { id: 'Prayer:' + x.m.x.e + ':' + pid, s: 'Prayer', n: `${x.m.n} with ${pr.n}`, i: pr.i, lv: 1, in: [], out: [], r: [], primary: bone?.id || null },
+          xph, gph: plan.gph - pph * (bone?.per || 0), pph, bone, boneHr, ppHave, bankHours: ppHave > 0 ? ppHave / pph : 0, prayer: pid, enemy: x.m.x.e,
+          r: { succ: 1, ins: bone ? [[bone.id, boneHr]] : [], outs: [], extra: {} }, direct: { xph, gph: plan.gph },
+          scratch: { feasible: true, xph, gph: plan.gph, steps: [], made: [], xpBy: [['Prayer', xph]], share: 1 }, src: 'gather',
+        });
+      }
+    }
+    return rows.sort((a, b) => b.xph - a.xph);
   }
 
   // ---------------------------------------------------------------- account read

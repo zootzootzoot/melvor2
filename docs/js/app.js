@@ -1,7 +1,7 @@
-import { decodeSave } from './save.js?v=20261127234044';
-import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261127234044';
-import { drawCard } from './card.js?v=20261127234044';
-import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261127234044';
+import { decodeSave } from './save.js?v=20261127234217';
+import { Engine, SKILL_ORDER, PASSIVE_SKILLS, NOT_TRAINABLE, COMBAT_SKILLS, HOUR, xpForLevel, levelFromXp, fmtGp, fmtNum, fmtDuration, fmtMs, fmtPct } from './engine.js?v=20261127234217';
+import { drawCard } from './card.js?v=20261127234217';
+import { $, $$, esc, img, svg, toast, relTime, debounce, bonusText, countUp } from './ui.js?v=20261127234217';
 
 window.__fmtGp = fmtGp;
 const app = $('#app');
@@ -35,7 +35,7 @@ const MODES = {
 // older views still reachable from links (bank-limited rates, value added)
 const HIDDEN_MODES = { bank: { label: 'From your bank' }, sell: { label: 'Value added' } };
 /** Skills outside the main order that the site can train (they open in Skills). */
-const TRAINABLE_EXTRA = new Set(['Astrology', 'Agility', 'Attack', 'Strength', 'Defence', 'Hitpoints', 'Ranged', 'Magic', 'Slayer']);
+const TRAINABLE_EXTRA = new Set(['Astrology', 'Agility', 'Attack', 'Strength', 'Defence', 'Hitpoints', 'Ranged', 'Magic', 'Slayer', 'Prayer']);
 const TABS = {
   overview: 'Overview', plan: 'Plan', money: 'Money', train: 'Skills', quests: 'Quests', farm: 'Farm', upgrades: 'Upgrades', bank: 'Bank', unlocks: 'Next unlocks', items: 'Items',
 };
@@ -840,7 +840,7 @@ function chainTree(chain) {
 // ---------------------------------------------------------------- training
 function viewTrain() {
   const e = E(), g = G(), s = state.save;
-  const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k)), ...['Astrology', 'Agility'].filter((k) => e.methods.some((m) => m.s === k)), ...(state.explorer ? [] : [...COMBAT_SKILLS, 'Slayer'])];
+  const skills = [...SKILL_ORDER.filter((k) => !NOT_TRAINABLE.has(k) && e.methods.some((m) => m.s === k)), ...['Astrology', 'Agility'].filter((k) => e.methods.some((m) => m.s === k)), ...(state.explorer ? [] : [...COMBAT_SKILLS, 'Slayer', 'Prayer'])];
   if (!skills.includes(state.trainSkill)) {
     // default: the skill closest to its next level by time
     state.trainSkill = skills.map((k) => ({ k, o: e.trainOptions(k)[0] })).filter((x) => x.o).sort((a, b) => {
@@ -920,7 +920,7 @@ function viewTrain() {
           const need = atLevel < 99 ? xpForLevel(atLevel + 1) - (atLevel === cur.level ? cur.xp : xpForLevel(atLevel)) : 0;
           return `<div class="trow ${i === 0 ? 'top' : ''}" data-item="${esc(o.m.primary || '')}">
             <span class="ico">${img(methodIcon(o.m), '', 28)}</span>
-            <span class="title"><b>${esc(o.m.n)} ${o.src === 'bank' ? `<span class="tag green">from bank · ${fmtDuration(o.bankHours)}</span>` : o.src === 'scratch' ? '<span class="tag">makes inputs</span>' : ''}</b><span class="sub">${o.slayer ? `${o.slayer.viable}/${o.slayer.total} task enemies you can farm<span class="sep">·</span>${fmtGp(o.slayer.coinsHr)} coins/hr<span class="sep">·</span>~${fmtDuration(o.slayer.perTaskHours)} per task` : o.stance ? `${esc(o.loadout?.style || '')} · ${esc(G().combat.stances[o.stance]?.n || o.stance)}${o.loadout?.gear.Weapon ? ` · ${esc(G().items[o.loadout.gear.Weapon]?.n || '')}` : ''}${o.loadout?.spell ? ` · ${esc(G().combat.spells[o.loadout.spell].n)}` : ''}<span class="sep">·</span>${fmtMs(o.killMs)} per kill<span class="sep">·</span>${esc(o.m.loc || '')}` : `lvl ${o.m.lv}`}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.src === 'scratch' && o.scratch.steps.length ? `<span class="sep">·</span>${o.scratch.steps.slice(0, 3).map((st) => `${img(methodIcon(st.m), '', 14)}${Math.round(st.share * 60)}m`).join(' ')}` : o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
+            <span class="title"><b>${esc(o.m.n)} ${o.src === 'bank' ? `<span class="tag green">from bank · ${fmtDuration(o.bankHours)}</span>` : o.src === 'scratch' ? '<span class="tag">makes inputs</span>' : ''}</b><span class="sub">${o.pph != null ? `${fmtNum(o.pph)} prayer points/hr${o.bone ? `<span class="sep">·</span>${fmtNum(o.boneHr, 1)} ${esc(E().name(o.bone.id))}/hr` : ''}<span class="sep">·</span>${o.bankHours > 0 ? `your bones last ${fmtDuration(o.bankHours)}` : 'no bones in your bank'}` : o.slayer ? `${o.slayer.viable}/${o.slayer.total} task enemies you can farm<span class="sep">·</span>${fmtGp(o.slayer.coinsHr)} coins/hr<span class="sep">·</span>~${fmtDuration(o.slayer.perTaskHours)} per task` : o.stance ? `${esc(o.loadout?.style || '')} · ${esc(G().combat.stances[o.stance]?.n || o.stance)}${o.loadout?.gear.Weapon ? ` · ${esc(G().items[o.loadout.gear.Weapon]?.n || '')}` : ''}${o.loadout?.spell ? ` · ${esc(G().combat.spells[o.loadout.spell].n)}` : ''}<span class="sep">·</span>${fmtMs(o.killMs)} per kill<span class="sep">·</span>${esc(o.m.loc || '')}` : `lvl ${o.m.lv}`}${o.r.succ < 1 ? `<span class="sep">·</span>${Math.round(o.r.succ * 100)}% success` : ''}${o.src === 'scratch' && o.scratch.steps.length ? `<span class="sep">·</span>${o.scratch.steps.slice(0, 3).map((st) => `${img(methodIcon(st.m), '', 14)}${Math.round(st.share * 60)}m`).join(' ')}` : o.m.in.length ? `<span class="sep">·</span>${o.m.in.slice(0, 3).map(([it]) => img(itemIcon(it), '', 14)).join('')}` : ''}</span></span>
             <span class="r num xpv" title="${esc(o.m.in.length ? `With inputs on hand: ${fmtGp(o.direct.xph)} xp/hr · making them yourself: ${o.scratch.feasible ? fmtGp(o.scratch.xph) : 'not possible yet'} xp/hr` : 'Gathering: no inputs needed')}">${fmtGp(o.xph)}</span>
             <span class="r num ${o.gph < 0 ? 'red' : 'green'}">${fmtGp(o.gph, { sign: true })}</span>
             <span class="r num muted">${atLevel < 99 ? fmtDuration(need / o.xph) : '—'}</span>

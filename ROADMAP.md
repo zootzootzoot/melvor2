@@ -3,6 +3,7 @@
 What players would pay for, ordered by value versus effort. Done items stay listed so the scope is visible.
 
 ## Shipped
+- Prayer training: XP from fighting with prayers on, prayer points and bones per hour, banked bones
 - Agility modelled: courses, obstacle success from technique levels, falls and restarts, tickets, marks and timed rewards; Agility in Skills and level routes
 - Quest rewards as item sources in routes; equipment bonuses (max hit, speed, protection, preservation, loot doubling) in combat
 - Checked against a community money guide: either/or requirements (chest key or lockpick), lockpicks used per attempt, by-products in production chains (cook the whales you catch), tools worth getting with their routes, one-skill path earnings, open-don't-sell
@@ -42,4 +43,4 @@ What players would pay for, ordered by value versus effort. Done items stay list
 - Guild task planner: every task with live progress, time estimates, and the fastest set of tasks to the next rank (in Training)
 
 ## Up next, in order
-1. **Combat, part 3.** Enemy passives and prayers.
+1. **Combat, part 3.** Enemy passives, and prayer bonuses inside fights.
