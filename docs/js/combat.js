@@ -26,12 +26,35 @@ export function makeFighter(g, lv, gear, spell = null) {
   const C = g.combat;
   const st = {};
   let pow = 0, prot = 0;
+  // bonuses worn gear gives (always-on ones; slayer-task-only bonuses are left out)
+  const mods = { maxHit: {}, minHitPct: 0, minHit: {}, intervalPct: 0, intervalFlat: 0, evaPct: 0, protPct: 0, powStyle: {}, lootDouble: 0, coinDouble: 0, coinPct: 0, ammoPres: 0, runePres: 0, runeCost: {} };
+  const styleKey = (c) => c.style || '*';
   for (const item of Object.values(gear)) {
     const e = item && g.items[item]?.eq;
     if (!e) continue;
     for (const [k, v] of Object.entries(e.st)) st[k] = (st[k] || 0) + v;
     pow += e.pow; prot += e.prot;
+    for (const [n, v, c] of e.b || []) {
+      if (c.cond || c.effect) continue;
+      if (n === 'PercentMaxHit') mods.maxHit[styleKey(c)] = (mods.maxHit[styleKey(c)] || 0) + v;
+      else if (n === 'MinHitBasedOnMaxHit') mods.minHitPct += v;
+      else if (n === 'FlatMinHit') mods.minHit[styleKey(c)] = (mods.minHit[styleKey(c)] || 0) + v;
+      else if (n === 'PercentAttackInterval') mods.intervalPct += v;
+      else if (n === 'FlatAttackInterval') mods.intervalFlat += v;
+      else if (n === 'PercentEvasionRating') mods.evaPct += v;
+      else if (n === 'PercentProtectionRating') mods.protPct += v;
+      else if (n === 'FlatProtectionRating') prot += v;
+      else if (n === 'FlatPowerRating') { if (c.style) mods.powStyle[c.style] = (mods.powStyle[c.style] || 0) + v; else pow += v; }
+      else if (n === 'FlatCombatStatValue' && c.stat) st[c.stat] = (st[c.stat] || 0) + v;
+      else if (n === 'ItemDoublingChance') mods.lootDouble += v;
+      else if (n === 'CurrencyDoublingChance') mods.coinDouble += v;
+      else if (n === 'PercentRewardCurrency') mods.coinPct += v;
+      else if (n === 'AmmoPreservationChance' && !c.ammo) mods.ammoPres += v;
+      else if (n === 'RunePreservationChance') mods.runePres += v;
+      else if (n === 'FlatRuneCost' && c.rune) mods.runeCost[c.rune] = (mods.runeCost[c.rune] || 0) + v;
+    }
   }
+  prot = Math.floor(prot * (1 + mods.protPct));
   const weapon = gear.Weapon || null;
   const wp = g.items[weapon]?.wp;
   const stances = C.weapons[wp?.type || 'Melee'] || C.weapons.Melee || ['Stab'];
@@ -41,7 +64,9 @@ export function makeFighter(g, lv, gear, spell = null) {
     for (const [k, v] of Object.entries(C.spells[spell].st)) st[k] = (st[k] || 0) + v;
     el = C.spells[spell].el || el;
   }
-  return { lv, st, pow: Math.max(1, pow), prot, stances, style, el, interval: st.AttackInterval || 3000, hp: lv.Hitpoints * 10, weapon, gear, spell, ammo: gear.Ammo || null };
+  pow += mods.powStyle[style] || 0;
+  const interval = Math.max(500, Math.floor(((st.AttackInterval || 3000) + mods.intervalFlat) * (1 + mods.intervalPct)));
+  return { lv, st, pow: Math.max(1, pow), prot, stances, style, el, interval, hp: lv.Hitpoints * 10, weapon, gear, spell, ammo: gear.Ammo || null, mods };
 }
 
 /** The fighter you saved with (equipped gear, no spell selection). */
@@ -57,7 +82,8 @@ export function enemyFighter(e) {
 function rating(C, f, stance, kind) {
   const s = C.stances[stance];
   const style = C.styles[s.style];
-  return Math.max(1, Math.floor((ratio(kind === 'acc' ? style.acc : style.eva, f.lv) + 9) * ((f.st[kind === 'acc' ? s.acc : s.eva] || 0) + 64)));
+  const r = Math.max(1, Math.floor((ratio(kind === 'acc' ? style.acc : style.eva, f.lv) + 9) * ((f.st[kind === 'acc' ? s.acc : s.eva] || 0) + 64)));
+  return kind === 'eva' && f.mods?.evaPct ? Math.floor(r * (1 + f.mods.evaPct)) : r;
 }
 
 export function maxHit(C, f, style) {
@@ -71,12 +97,13 @@ export const hitChance = (acc, eva) => Math.min(1, Math.max(0, acc >= eva ? 1 - 
 export const resistance = (pow, prot) => Math.min(0.7, Math.max(0, prot / (pow + prot)));
 
 /** Expected damage of a uniform [1, max] roll after resistance and armour (min 1). */
-function avgDamage(max, res, armour = 0) {
+function avgDamage(max, res, armour = 0, min = 1) {
   if (max <= 0) return 0;
-  if (max > 300) return Math.max(1, ((1 + max) / 2) * (1 - res) - armour);
+  const lo = Math.max(1, Math.min(min, max));
+  if (max - lo > 300) return Math.max(1, ((lo + max) / 2) * (1 - res) - armour);
   let s = 0;
-  for (let d = 1; d <= max; d++) s += Math.max(1, Math.floor(d * (1 - res)) - armour);
-  return s / max;
+  for (let d = lo; d <= max; d++) s += Math.max(1, Math.floor(d * (1 - res)) - armour);
+  return s / (max - lo + 1);
 }
 
 const enemyStyle = (C, enemy) => C.stances[enemy.stances[0]?.[0]]?.style || 'Melee';
@@ -92,9 +119,11 @@ export function fight(C, player, enemy, only = null) {
     if (!s) continue;
     const base = maxHit(C, player, s.style);
     if (base <= 0) continue;
-    const mh = Math.max(1, Math.floor(base * (1 + elem) * (1 + (tri.MaxHitCombatTriangle || 0))));
+    const pm = player.mods || {};
+    const mh = Math.max(1, Math.floor(base * (1 + (pm.maxHit?.['*'] || 0) + (pm.maxHit?.[s.style] || 0)) * (1 + elem) * (1 + (tri.MaxHitCombatTriangle || 0))));
+    const minHit = Math.min(mh, Math.max(1, Math.floor(mh * (pm.minHitPct || 0)) + (pm.minHit?.['*'] || 0) + (pm.minHit?.[s.style] || 0)));
     const hc = hitChance(rating(C, player, stance, 'acc'), rating(C, enemy, stance, 'eva'));
-    const dmg = avgDamage(mh, resistance(player.pow, enemy.prot), enemy.st.Armour || 0);
+    const dmg = avgDamage(mh, resistance(player.pow, enemy.prot), enemy.st.Armour || 0, minHit);
     const dps = (hc * dmg) / player.interval;
     if (!best || dps > best.dps) best = { stance, style: s.style, hc, mh, dmg, dps };
   }

@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127070212';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127233658';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -484,8 +484,9 @@ export class Engine {
   combatInputs(f, p) {
     const ins = [];
     if (this.food && f.takenPerKill > 0) ins.push([this.food, f.takenPerKill / this.items[this.food].heal]);
-    if (p.ammo) ins.push([p.ammo, f.attacks]);
-    if (p.spell) for (const [it, q] of this.g.combat.spells[p.spell].runes) ins.push([it, q * f.attacks]);
+    const m = p.mods || {};
+    if (p.ammo) ins.push([p.ammo, f.attacks * (1 - Math.min(1, m.ammoPres || 0))]);
+    if (p.spell) for (const [it, q] of this.g.combat.spells[p.spell].runes) ins.push([it, Math.max(0, q + (m.runeCost?.[it] || 0)) * f.attacks * (1 - Math.min(1, m.runePres || 0))]);
     return ins;
   }
 
@@ -511,7 +512,9 @@ export class Engine {
     const e = C.enemies[eid];
     const enemy = enemyFighter(e);
     const m = this.byId.get('Combat:' + eid);
-    const loot = (m?.out || []).reduce((a, [it, q]) => a + q * this.value(it), 0) + (m?.gp || 0);
+    const lootItems = (m?.out || []).reduce((a, [it, q]) => a + q * this.value(it), 0), lootGp = m?.gp || 0;
+    // worn gear can double item drops or coins (e.g. Rabbit's Foot Necklace)
+    const lootOf = (p) => lootItems * (1 + (p?.mods?.lootDouble || 0)) + lootGp * (1 + (p?.mods?.coinDouble || 0)) * (1 + (p?.mods?.coinPct || 0));
     const viable = (f) => f.danger < 0.9 && f.killMs <= 20 * 60000;
     const xpMult = m ? 1 + this.mod(m, 'PercentXPGained', null, 'Experience') : 1;
     let score;
@@ -529,7 +532,7 @@ export class Engine {
       return best;
     };
     if (skill) score = (f, p) => xpOf(p)?.xph ?? null;
-    else score = (f, p) => (viable(f) ? (HOUR / f.killMs) * (loot - this.inputCost(this.combatInputs(f, p))) : null);
+    else score = (f, p) => (viable(f) ? (HOUR / f.killMs) * (lootOf(p) - this.inputCost(this.combatInputs(f, p))) : null);
     const start = Object.fromEntries(Object.entries(this.p.equipment || {}).map(([slot, x]) => [slot, x.item]));
     // for XP, only weapons with a stance that gives this skill's XP
     const weaponOk = skill ? (w) => (C.weapons[this.items[w]?.wp?.type || 'Melee'] || []).some((st) => (C.stances[st]?.xp || []).some(([sk]) => sk === skill)) : null;
@@ -540,7 +543,7 @@ export class Engine {
     }
     if (res) {
       const ins = this.combatInputs(res.f, res.p);
-      res.gph = (HOUR / res.f.killMs) * (loot - this.inputCost(ins));
+      res.gph = (HOUR / res.f.killMs) * (lootOf(res.p) - this.inputCost(ins));
       res.ins = ins;
     }
     this._combatCache.set(key, res);
@@ -1807,6 +1810,25 @@ export class Engine {
       const haveHeal = (this.bank[food] || 0) * this.items[food].heal;
       return r.ins.map(([it, q]) => (it === food ? [fb, Math.max(0, q * this.items[food].heal) / this.items[fb].heal, food, haveHeal] : [it, q]));
     };
+    // quest rewards: item -> [{ quest, qty }] for quests you haven't finished
+    const rewardsTaken = new Set();
+    const questRewards = new Map();
+    for (const [qid, Q] of Object.entries(this.g.quests || {})) {
+      if (this.questInfo(qid)?.done) continue;
+      for (const [it, n] of Q.rw?.items || []) { if (!questRewards.has(it)) questRewards.set(it, []); questRewards.get(it).push({ id: qid, qty: n }); }
+    }
+    const QH = new Map();
+    const questChainH = (qid, seen = new Set()) => {
+      if (QH.has(qid)) return QH.get(qid);
+      if (seen.has(qid)) return 0;
+      seen.add(qid);
+      const qi = this.questInfo(qid);
+      if (!qi || qi.done) return 0;
+      let h = Number.isFinite(qi.hours) ? qi.hours : Infinity;
+      for (const r of qi.Q.r) if (r.t === 'quest') h += questChainH(r.id, seen);
+      QH.set(qid, h);
+      return h;
+    };
     // phase 1: cheapest way to get qty of an item (hours of play, gold counted as time at your best rate)
     const memo = new Map();
     const choose = (item, q, stack) => {
@@ -1836,6 +1858,16 @@ export class Engine {
           h += choose(it, need, stack).h;
         }
         opts.push({ kind: 'make', m, h, perHour: per, hours, req: rc.h });
+      }
+      // unfinished quests that hand this item out: the quest (and the ones before it) is the price
+      for (const qr of questRewards.get(item) || []) {
+        if (rewardsTaken.has(qr.id + '|' + item)) continue;
+        const qh = questChainH(qr.id);
+        if (!Number.isFinite(qh)) continue;
+        const rest = Math.max(0, q - qr.qty - (this.bank[item] || 0));
+        // the rest of the same item, from its other sources (smaller amount, so this can't loop)
+        const h = qh + (rest > 0 ? choose(item, rest, new Set([...stack].filter((x) => x !== item))).h : 0);
+        opts.push({ kind: 'quest', qid: qr.id, qty: qr.qty, h });
       }
       for (const c of this.conversions.get(item) || []) {
         const n = q / c.per;
@@ -1875,7 +1907,7 @@ export class Engine {
     const bank = { ...this.bank };
     const lvNeed = {}, quests = new Set(), kills = new Map(), shopNeed = new Set(), notes = new Set();
     const steps = new Map(); // method id -> { m, hours, items: Map(item -> qty), order }
-    const readyGear = new Set(), readyFor = new Set(), toolsGot = new Set();
+    const readyGear = new Set(), readyFor = new Set(), toolsGot = new Set(), rewardFrom = new Map();
     const buys = new Map();
     const used = new Map();
     let order = 0, missing = null;
@@ -1886,6 +1918,15 @@ export class Engine {
       const c = choose(item, q, new Set());
       if (!Number.isFinite(c.h) || depth > 8) { const why = explain(item, new Set()); missing = missing || why.item; notes.add(why.text); return; }
       if (c.kind === 'buy') { buys.set(item, (buys.get(item) || 0) + q); return; }
+      if (c.kind === 'quest') {
+        quests.add(c.qid);
+        // every reward lands in the bank for later steps
+        for (const [it, n] of this.g.quests[c.qid]?.rw?.items || []) if (!rewardsTaken.has(c.qid + '|' + it)) { rewardsTaken.add(c.qid + '|' + it); bank[it] = (bank[it] || 0) + n; }
+        rewardFrom.set(item, c.qid);
+        for (const k of [...memo.keys()]) if (k.startsWith(item + '|')) memo.delete(k); // re-choose without this quest
+        realize(item, q, depth + 1);
+        return;
+      }
       if (c.kind === 'conv') {
         const cv = c.c, n = q / cv.per;
         for (const r of cv.r) { const st = this.reqStatus(r); if (!st.ok && st.kind === 'lvl') lvNeed[st.skill] = Math.max(lvNeed[st.skill] || 0, st.need); }
@@ -1979,7 +2020,8 @@ export class Engine {
     const made = [...steps.values()].sort((a, b) => a.order - b.order);
     const activeH = made.reduce((a, s) => a + (s.m.k === 'passive' ? 0 : s.hours), 0);
     const total = training.reduce((a, t) => a + t.hours, 0) + questList.reduce((a, q) => a + q.hours, 0) + killList.reduce((a, k) => a + k.hours, 0) + activeH + earn;
-    const res = { readyFor: [...readyFor], readyGear: [...readyGear], item: target, qty: tq, have: this.bank[target] || 0, used: [...used], buys: [...buys], shopNeed: [...shopNeed], training, quests: questList, kills: killList, steps: made, gp, earn, total, notes: [...notes], missing, best, choice: choose(target, Math.max(1, tq - (this.bank[target] || 0)), new Set()) };
+    const res = { rewardFrom: [...rewardFrom], readyFor: [...readyFor], readyGear: [...readyGear], item: target, qty: tq, have: this.bank[target] || 0,
+      used: [...used].map(([it, q]) => [it, Math.min(q, this.bank[it] || 0)]).filter(([, q]) => q > 0), /* only what was yours; the rest came from quest rewards or by-products */ buys: [...buys], shopNeed: [...shopNeed], training, quests: questList, kills: killList, steps: made, gp, earn, total, notes: [...notes], missing, best, choice: choose(target, Math.max(1, tq - (this.bank[target] || 0)), new Set()) };
     this._cache.set(key, res);
     return res;
   }
@@ -3062,7 +3104,13 @@ export class Engine {
       if (a.used.length) steps.push({ kind: 'have', id: 'bank', title: 'Use what you have', hours: 0, items: a.used, why: a.used.map(([it, q]) => `${Math.round(q).toLocaleString('en-US')} ${this.name(it)}`).join(', ') });
       for (const tr of a.training) steps.push({ kind: 'train', id: 't:' + tr.skill + tr.level, skill: tr.skill, level: tr.level, from: tr.from, title: `Train ${tr.skill} to ${tr.level}`, hours: tr.hours,
         why: tr.credit > 0 ? `the steps below give ${Math.round(tr.credit).toLocaleString('en-US')} ${tr.skill} XP of it (saves ${fmtDuration(tr.full - tr.hours)})` : 'a step below needs it' });
-      for (const q of a.quests) steps.push({ kind: 'quest', id: 'q:' + q.id, q: q.q, title: `Quest: ${q.q.Q.n}`, hours: q.hours, why: 'unlocks a source below' });
+      const gives = new Map();
+      for (const [it, qid] of a.rewardFrom || []) gives.set(qid, [...(gives.get(qid) || []), it]);
+      for (const q of a.quests) {
+        const rw = gives.get(q.id);
+        steps.push({ kind: 'quest', id: 'q:' + q.id, q: q.q, title: `Quest: ${q.q.Q.n}`, hours: q.hours,
+          why: rw ? `rewards ${rw.map((it) => `${(q.q.Q.rw?.items || []).find(([x]) => x === it)?.[1]?.toLocaleString('en-US') || ''} ${this.name(it)}`).join(', ')}` : 'a step below needs it' });
+      }
       for (const k of a.kills) steps.push({ kind: 'kill', id: 'k:' + k.enemy, enemy: k.enemy, title: `Kill ${k.n} ${this.g.combat.enemies[k.enemy]?.n || k.enemy}`, hours: k.hours, why: k.style ? `${k.style} · unlocks a source below` : 'not safe with your gear yet' });
       for (const sp of a.shopNeed) steps.push({ kind: 'shop', id: 's:' + sp, title: `Buy ${this.g.shop[sp]?.n || sp}`, hours: 0, why: 'unlocks a source below' });
       if (a.buys.length) steps.push({ kind: 'buy', id: 'buy', title: `Buy ${a.buys.map(([it, q]) => `${Math.ceil(q).toLocaleString('en-US')} ${this.name(it)}`).join(', ')}`, hours: 0, items: a.buys, why: 'from the shop' });

@@ -267,6 +267,18 @@ def main():
                 "occ": [short(x) for x in eq.get("OccupiesSlots") or []],
                 "r": reqs_of(eq.get("Requirements")),
             }
+            # bonuses the item gives while worn: [stat, value, {style, stat, rune, ammo, effect, cond}]
+            eb = []
+            for b in ((eq.get("Bonuses") or {}).get("Component") or []):
+                if not b.get("Stat"):
+                    continue
+                lc = b.get("LocalContext") or {}
+                ctx = {k2: short(lc.get(k1)) for k1, k2 in (("CombatStyle", "style"), ("CombatStat", "stat"), ("Rune", "rune"), ("AmmoType", "ammo"), ("Effect", "effect")) if lc.get(k1)}
+                if b.get("Condition"):
+                    ctx["cond"] = short(b["Condition"]["Type"])
+                eb.append([b["Stat"]["Name"], b["Value"], ctx])
+            if eb:
+                items[it["Id"]]["eq"]["b"] = eb
         wp = caps.get(NS + "Weapon")
         if wp:
             items[it["Id"]]["wp"] = {"type": short(wp.get("Type")), "ammo": short(wp.get("RequiredAmmoType")),
