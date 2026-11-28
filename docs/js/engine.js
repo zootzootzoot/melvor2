@@ -1,4 +1,4 @@
-import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234625';
+import { SPAWN_MS, playerFighter, enemyFighter, fight, dropsPerKill, SLOT_OF, gearPool, bestLoadout, combatLevels, makeFighter } from './combat.js?v=20261127234709';
 
 // Melvor Ledger engine: game data + a decoded save -> rates, rankings and plans.
 // Every formula mirrors the game's own stat computers and action handlers
@@ -356,6 +356,14 @@ export class Engine {
 
   /** Status, progress and time left for one quest, plus what it rewards and unlocks. */
   questInfo(qid) {
+    const ck = 'qi|' + qid;
+    if (this._cache.has(ck)) return this._cache.get(ck);
+    const res = this._questInfo(qid);
+    this._cache.set(ck, res);
+    return res;
+  }
+
+  _questInfo(qid) {
     const Q = this.g.quests?.[qid];
     if (!Q) return null;
     const sv = this.p.quests?.[qid] || { state: 0, steps: {} };
@@ -1888,10 +1896,14 @@ export class Engine {
     };
     // quest rewards: item -> [{ quest, qty }] for quests you haven't finished
     const rewardsTaken = new Set();
-    const questRewards = new Map();
-    for (const [qid, Q] of Object.entries(this.g.quests || {})) {
-      if (this.questInfo(qid)?.done) continue;
-      for (const [it, n] of Q.rw?.items || []) { if (!questRewards.has(it)) questRewards.set(it, []); questRewards.get(it).push({ id: qid, qty: n }); }
+    let questRewards = this._cache.get('questRewards');
+    if (!questRewards) {
+      questRewards = new Map();
+      for (const [qid, Q] of Object.entries(this.g.quests || {})) {
+        if (!Q.rw?.items?.length || this.questInfo(qid)?.done) continue;
+        for (const [it, n] of Q.rw.items) { if (!questRewards.has(it)) questRewards.set(it, []); questRewards.get(it).push({ id: qid, qty: n }); }
+      }
+      this._cache.set('questRewards', questRewards);
     }
     const QH = new Map();
     const questChainH = (qid, seen = new Set()) => {
@@ -2282,7 +2294,7 @@ export class Engine {
     }
     cands.sort((a, b) => b.gain - a.gain);
     const out = [];
-    for (const c of cands.slice(0, limit * 2)) {
+    for (const c of cands.slice(0, limit + 2)) {
       const have = (this.bank[c.id] || 0) > 0;
       const a = have ? null : this.acquire(c.id, 1);
       const hours = (have ? 0 : a.notes.length || a.missing ? Infinity : a.total) + (c.train || 0);
